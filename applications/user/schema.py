@@ -1,0 +1,59 @@
+from typing import Dict, Any
+
+from applications.user.models import User, Permission
+
+
+
+async def serialize_user(user: User) -> Dict[str, Any]:
+    await user.fetch_related(
+        "groups",
+        "groups__permissions",
+        "user_permissions",
+    )
+
+
+    if user.is_superuser:
+        all_codes = await Permission.all().values_list("codename", flat=True)
+        permission_codes = {code for code in all_codes if code}
+    else:
+        permission_codes = {p.codename for p in user.user_permissions if p.codename}
+        for group in user.groups:
+            for permission in group.permissions:
+                if permission.codename:
+                    permission_codes.add(permission.codename)
+
+
+
+    # ---------------- RESPONSE ----------------
+    return {
+        # -------- BASIC INFO --------
+        "id": user.id,
+        "email": user.email,
+        "username": user.username,
+        "auth_provider": user.auth_provider,
+        
+
+        # -------- STATUS FLAGS --------
+        "is_active": user.is_active,
+        "is_superuser": user.is_superuser,
+
+        # -------- PROFILE INFO --------
+        "first_name": user.first_name,
+        "last_name": user.last_name,
+        "gender": user.gender,
+        "photo": user.photo,
+        "dob": user.dob.isoformat() if user.dob else None,
+
+        # -------- RELATIONSHIPS --------
+        "groups": [{"id": g.id, "name": g.name} for g in user.groups],
+        "permissions": [
+            {"id": p.id, "codename": p.codename, "name": p.name}
+            for p in user.user_permissions
+        ],
+        "permission_codes": sorted(permission_codes),
+
+
+        # -------- META --------
+        "created_at": user.created_at.isoformat(),
+        "updated_at": user.updated_at.isoformat(),
+    }
