@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     APPLE_CLIENT_IDS: str = ""
     BASE_URL: str = "http://localhost:8000/"
     RADIS_URL: str = "redis://localhost:6379/0"
+    GEMINI_API_KEY: Optional[str] = None
 
     def model_post_init(self, __context):
         if self.DB_ENGINE == "sqlite":
