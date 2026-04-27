@@ -1,3 +1,4 @@
+import datetime
 from typing import Optional
 import re
 
@@ -188,6 +189,8 @@ async def signup(
     username: str = Form(...),
     email: str = Form(...),
     password: str = Form(...),
+    gender: Optional[str] = Form(None),
+    dob: Optional[str] = Form(None),
     otp: str = Form(...),
 ):
     email = _normalize_email(email)
@@ -205,11 +208,16 @@ async def signup(
 
     if await User.get_or_none(email=email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    
+    gender = gender.strip() if gender else None
+    dob = datetime.strptime(dob, "%Y-%m-%d").date() if dob else None
 
     user = await User.create(
         username=username,
         email=email,
-        password=User.set_password(password)
+        password=User.set_password(password),
+        gender=gender, 
+        dob=dob,       
     )
 
     return _build_auth_response(user, message="User created successfully")
