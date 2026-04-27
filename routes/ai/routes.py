@@ -18,6 +18,8 @@ from applications.ai.schema import (
     EquipmentInfoResponse,
     EquipmentScanRequest,
     EquipmentScanResponse,
+    EquipmentVerifyRequest,
+    EquipmentVerifyResponse,
 )
 from applications.user.models import User
 
@@ -216,3 +218,62 @@ Equipment: Bench Press (0.87)"""
             error_message=f"Failed to process image: {str(e)}"
         )
 
+
+
+@router.post("/verify-equipment", response_model=EquipmentVerifyResponse)
+async def verify_equipment(
+    equipment_name: str = File(..., description="Name of the equipment to verify"),
+    image: UploadFile = File(..., description="Image file to verify against equipment name")
+):
+    """
+    Verify if the uploaded image matches the given equipment name
+    """
+    try:
+        image_bytes = await image.read()
+        pil_image = Image.open(io.BytesIO(image_bytes))
+
+        prompt = f"""Analyze this image and determine if it shows a '{equipment_name}'.
+
+Respond with:
+- "YES" if the image clearly shows {equipment_name}
+- "NO" if the image does not show {equipment_name} or shows different equipment
+
+Also provide a confidence score (0-1) for your answer.
+
+Format:
+Answer: YES/NO
+Confidence: 0.XX
+Explanation: [brief explanation]"""
+        
+        response_text = _generate_ai_response(prompt, pil_image)
+        
+        # Parse response
+        is_match = "yes" in response_text.lower().split("\n")[0]
+        
+        # Extract confidence
+        confidence = 0.0
+        confidence_match = re.search(r'confidence[:\s]+(\d+\.?\d*)', response_text, re.IGNORECASE)
+        if confidence_match:
+            confidence = float(confidence_match.group(1))
+            if confidence > 1.0:
+                confidence = confidence / 100.0
+        
+        if is_match:
+            message = f"Yes, this is {equipment_name}"
+        else:
+            message = f"No, this is not {equipment_name}"
+        
+        return EquipmentVerifyResponse(
+            success=True,
+            is_match=is_match,
+            message=message,
+            confidence=confidence
+        )
+
+    except Exception as e:
+        return EquipmentVerifyResponse(
+            success=False,
+            is_match=False,
+            message=f"Failed to verify: {str(e)}",
+            confidence=None
+        )
