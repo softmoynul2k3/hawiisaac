@@ -90,7 +90,7 @@ def _generate_ai_response(prompt: str, image=None) -> str:
 
 def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
     """Extract equipment names and confidence from AI response"""
-    equipment_list = []
+    equipment_dict = {}  # Use dict to avoid duplicates
     
     patterns = [
         r'Equipment:\s*([^(]+)\s*\((\d+(?:\.\d+)?)\)',
@@ -108,27 +108,15 @@ def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
                 confidence = confidence / 100.0
             
             if name and confidence > 0.3:
-                equipment_list.append(EquipmentDetection(
-                    name=name,
-                    confidence=min(confidence, 1.0),
-                    description=None
-                ))
+                # Keep highest confidence if duplicate
+                if name not in equipment_dict or equipment_dict[name] < confidence:
+                    equipment_dict[name] = min(confidence, 1.0)
     
-    if not equipment_list:
-        equipment_keywords = [
-            'dumbbell', 'barbell', 'bench', 'squat', 'deadlift', 'press', 'curl',
-            'machine', 'treadmill', 'bike', 'elliptical', 'rower', 'cable',
-            'kettlebell', 'medicine ball', 'resistance band', 'pull up', 'dip'
-        ]
-        
-        for keyword in equipment_keywords:
-            if keyword in response_text.lower():
-                equipment_list.append(EquipmentDetection(
-                    name=keyword.title(),
-                    confidence=0.7,
-                    description=None
-                ))
-                break
+    # Convert dict to list
+    equipment_list = [
+        EquipmentDetection(name=name, confidence=conf, description=None)
+        for name, conf in equipment_dict.items()
+    ]
     
     return equipment_list
 
@@ -142,137 +130,82 @@ def _get_primary_equipment(equipment_list: List[EquipmentDetection]) -> Optional
     return primary.name if primary.confidence > 0.5 else None
 
 
-@router.post("/scan-equipment", response_model=EquipmentScanResponse)
-async def scan_equipment_image(
-    payload: EquipmentScanRequest,
-    current_user: User = Depends(login_required)
-):
-    """
-    Scan an image to identify gym equipment using AI
-    """
-    try:
-        image_data = base64.b64decode(payload.image_data)
-        image = Image.open(io.BytesIO(image_data))
-        
-        default_prompt = """
-        Analyze this image and identify any gym equipment visible. 
-        For each equipment found, provide the name and confidence level (0-1).
-        Focus on common gym equipment like dumbbells, barbells, benches, machines, etc.
-        Format your response as a list with equipment names and confidence scores.
-        Example format:
-        Equipment: Dumbbell (0.95)
-        Equipment: Bench Press (0.87)
-        """
-        
-        prompt = payload.prompt or default_prompt
-        response_text = _generate_ai_response(prompt, image)
-        
-        equipment_list = _extract_equipment_names(response_text)
-        primary_equipment = _get_primary_equipment(equipment_list)
-        
-        return EquipmentScanResponse(
-            success=True,
-            equipment_detected=equipment_list,
-            primary_equipment=primary_equipment
-        )
-        
-    except Exception as e:
-        return EquipmentScanResponse(
-            success=False,
-            equipment_detected=[],
-            error_message=f"Failed to process image: {str(e)}"
-        )
-
-
-@router.post("/equipment-info", response_model=EquipmentInfoResponse)
-async def get_equipment_info(
-    payload: EquipmentInfoRequest,
-    current_user: User = Depends(login_required)
-):
-    """
-    Get detailed information about a specific piece of equipment
-    """
-    try:
-        prompt = f"""
-        Provide detailed information about the gym equipment: {payload.equipment_name}
-        Include:
-        - Category (e.g., strength training, cardio, etc.)
-        - Primary muscle groups worked
-        - Brief description
-        - 3-5 common exercises performed with this equipment
-        
-        Format the response clearly with each section labeled.
-        """
-        
-        response_text = _generate_ai_response(prompt)
-        
-        category = "Strength Training"
-        muscle_groups = []
-        description = response_text.split('\n')[0] if response_text else "Gym equipment"
-        common_exercises = []
-        
-        lines = response_text.split('\n')
-        
-        for line in lines:
-            line = line.strip().lower()
-            if 'category' in line:
-                category = line.split(':', 1)[-1].strip() if ':' in line else category
-            elif 'muscle' in line or 'target' in line:
-                if ':' in line:
-                    muscles = line.split(':', 1)[-1].strip()
-                    muscle_groups = [m.strip() for m in muscles.split(',')]
-            elif 'exercise' in line:
-                if ':' in line:
-                    exercises = line.split(':', 1)[-1].strip()
-                    common_exercises = [e.strip() for e in exercises.split(',')]
-        
-        equipment_info = EquipmentInfo(
-            name=payload.equipment_name,
-            category=category,
-            muscle_groups=muscle_groups,
-            description=description,
-            common_exercises=common_exercises
-        )
-        
-        return EquipmentInfoResponse(
-            success=True,
-            equipment=equipment_info
-        )
-        
-    except Exception as e:
-        return EquipmentInfoResponse(
-            success=False,
-            error_message=f"Failed to get equipment info: {str(e)}"
-        )
-
-
 @router.post("/scan-equipment-upload", response_model=EquipmentScanResponse)
 async def scan_equipment_image_upload(
     image: UploadFile = File(..., description="Image file to scan for equipment detection")
 ):
     """
-    Scan an uploaded image file to identify gym equipment using AI
+    Scan an uploaded image file to identify gym equipment from database
     """
     try:
+        from applications.equipments.models import Equipment
+        
+        # Get all equipment from database
+        equipment_list_db = await Equipment.all().values('id', 'name', 'description')
+        
+        if not equipment_list_db:
+            return EquipmentScanResponse(
+                success=False,
+                equipment_detected=[],
+                error_message="No equipment found in database"
+            )
+        
+        equipment_names = [eq['name'] for eq in equipment_list_db]
+        equipment_names_str = ", ".join(equipment_names)
+        
         image_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(image_bytes))
 
-        prompt = """Analyze this image and identify any gym equipment visible.
-For each equipment found, provide the name and confidence level (0-1).
-Focus on common gym equipment like dumbbells, barbells, benches, machines, etc.
-Format your response as a list with equipment names and confidence scores.
-Example format:
+        prompt = f"""Analyze this image and identify gym equipment visible.
+Only detect equipment from this list: {equipment_names_str}
+
+For each equipment found from the list, provide the name (exactly as listed) and confidence level (0-1).
+If no equipment from the list is visible, respond with "No equipment found".
+
+Format your response as:
+Equipment: [exact name from list] (confidence)
+Example:
 Equipment: Dumbbell (0.95)
 Equipment: Bench Press (0.87)"""
         
         response_text = _generate_ai_response(prompt, pil_image)
 
-        equipment_list = _extract_equipment_names(response_text)
-        primary_equipment = _get_primary_equipment(equipment_list)
+        if "no equipment found" in response_text.lower():
+            return EquipmentScanResponse(
+                success=True,
+                equipment_detected=[],
+                primary_equipment=None,
+                error_message="This equipment is not found in this gym"
+            )
+
+        equipment_detected = _extract_equipment_names(response_text)
+        
+        # Filter only equipment that exists in database
+        valid_equipment = []
+        for eq in equipment_detected:
+            # Case-insensitive matching
+            matched = next((db_eq for db_eq in equipment_list_db 
+                          if db_eq['name'].lower() == eq.name.lower()), None)
+            if matched:
+                valid_equipment.append(EquipmentDetection(
+                    name=matched['name'],
+                    confidence=eq.confidence,
+                    description=matched.get('description')
+                ))
+        
+        if not valid_equipment:
+            return EquipmentScanResponse(
+                success=True,
+                equipment_detected=[],
+                primary_equipment=None,
+                error_message="This equipment is not found in this gym"
+            )
+        
+        primary_equipment = _get_primary_equipment(valid_equipment)
 
         return EquipmentScanResponse(
             success=True,
-            equipment_detected=equipment_list,
+            equipment_detected=valid_equipment,
             primary_equipment=primary_equipment
         )
 
@@ -283,8 +216,3 @@ Equipment: Bench Press (0.87)"""
             error_message=f"Failed to process image: {str(e)}"
         )
 
-
-@router.get("/health")
-async def health_check():
-    """Health check endpoint for AI service"""
-    return {"status": "healthy", "service": "AI Equipment Detection"}
