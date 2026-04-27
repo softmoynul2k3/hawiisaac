@@ -15,6 +15,7 @@ from app.utils.auto_routing import get_module
 from app.dummy.users import create_test_users
 from app.dummy.equipments import create_test_equipments
 from app.dummy.sessions import create_test_sessions
+from app.dummy.content import create_test_content
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
@@ -31,6 +32,7 @@ async def lifespan(routerAPI: FastAPI):
             await create_test_users()
             await create_test_equipments()
             await create_test_sessions()
+            await create_test_content()
         except Exception as error:
             print(f"startup seeding failed: {error}")
         
