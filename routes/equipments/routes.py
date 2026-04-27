@@ -1,14 +1,20 @@
+from datetime import date
 from typing import List, Optional
 import json
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from tortoise.expressions import Q
 
-from app.auth import permission_required
+from app.auth import login_required, permission_required
+from app.utils.datetime_formatter import to_utc_z
 from app.utils.file_manager import save_file, update_file, delete_file
 
+from applications.content.models import Content
 from applications.equipments.models import Workout, Category, Equipment, MuscleGroups
 from applications.equipments.schema import serialize_workout
+from applications.session.models import WorkoutLog, WorkoutSession
+from applications.session.schema import StartWorkoutLogOut
+from applications.user.models import User
 
 
 router = APIRouter(prefix="/workout", tags=["Workout"])
@@ -72,6 +78,30 @@ async def _parse_muscle_group_ids(muscle_group_ids: Optional[str]) -> Optional[L
 
     muscle_groups_by_id = {muscle_group.id: muscle_group for muscle_group in muscle_groups}
     return [muscle_groups_by_id[item] for item in unique_ids]
+
+
+def _serialize_started_workout_log(workout_log: WorkoutLog) -> dict:
+    return {
+        "id": workout_log.id,
+        "workout": {
+            "id": workout_log.workout.id,
+            "name": workout_log.workout.name,
+        },
+        "note": workout_log.note,
+        "set_logs": [],
+        "cardio_log": None,
+    }
+
+
+def _serialize_started_session(session: WorkoutSession, workout_log: WorkoutLog) -> dict:
+    return {
+        "id": session.id,
+        "user_id": session.user_id,
+        "date": session.date,
+        "duration_minutes": session.duration_minutes,
+        "created_at": to_utc_z(session.created_at) or "",
+        "workout_logs": [_serialize_started_workout_log(workout_log)],
+    }
 
 
 # ---------------- CREATE ----------------
@@ -182,6 +212,44 @@ async def get_workout(workout_id: int):
         raise HTTPException(status_code=404, detail="Workout not found")
 
     return await serialize_workout(workout)
+
+
+@router.post("/{workout_id}/start-log", response_model=StartWorkoutLogOut, status_code=status.HTTP_201_CREATED)
+async def start_workout_log(
+    workout_id: int,
+    content_id: Optional[int] = Query(None),
+    current_user: User = Depends(login_required),
+):
+    workout = await Workout.get_or_none(id=workout_id).prefetch_related("equipment", "category", "muscle_groups")
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    content = None
+    if content_id is not None:
+        content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
+        if not content:
+            raise HTTPException(status_code=404, detail="Content not found")
+        linked_workout_ids = {item.id for item in content.workouts}
+        if linked_workout_ids and workout.id not in linked_workout_ids:
+            raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
+
+    session = await WorkoutSession.create(
+        user=current_user,
+        date=date.today(),
+        duration_minutes=1,
+    )
+    workout_log = await WorkoutLog.create(
+        session=session,
+        workout=workout,
+        content=content,
+        note=f"Started workout: {workout.name}",
+    )
+    await workout_log.fetch_related("workout", "content")
+
+    return StartWorkoutLogOut(
+        session=_serialize_started_session(session, workout_log),
+        first_workout_log=_serialize_started_workout_log(workout_log),
+    )
 
 
 # ---------------- UPDATE ----------------

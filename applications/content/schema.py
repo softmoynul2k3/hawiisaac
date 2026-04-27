@@ -9,6 +9,7 @@ from applications.content.models import Content, ContentFeedType
 class ContentCreate(BaseModel):
     title: str
     feed_type: ContentFeedType = ContentFeedType.BROWSE
+    workout_ids: list[int] = []
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -19,6 +20,7 @@ class ContentCreate(BaseModel):
 class ContentUpdate(BaseModel):
     title: Optional[str] = None
     feed_type: Optional[ContentFeedType] = None
+    workout_ids: Optional[list[int]] = None
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -30,6 +32,7 @@ class ContentOut(BaseModel):
     id: int
     title: str
     feed_type: ContentFeedType
+    workouts: list[dict] = []
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -51,6 +54,11 @@ class ContentSummaryOut(BaseModel):
     view_count: int
 
 
+class ContentListWithWorkoutsOut(BaseModel):
+    contents: list[ContentOut]
+    workouts: list[dict]
+
+
 def normalize_content_text(value: Optional[str], *, required: bool = False, field_name: str = "Value") -> Optional[str]:
     if value is None:
         if required:
@@ -64,10 +72,21 @@ def normalize_content_text(value: Optional[str], *, required: bool = False, fiel
 
 
 def serialize_content(content: Content) -> ContentOut:
+    workouts = sorted(list(getattr(content, "workouts", []) or []), key=lambda item: item.id)
     return ContentOut(
         id=content.id,
         title=content.title,
         feed_type=content.feed_type,
+        workouts=[
+            {
+                "id": workout.id,
+                "name": workout.name,
+                "sets": workout.sets,
+                "reps": workout.reps,
+                "rest": workout.rest,
+            }
+            for workout in workouts
+        ],
         summary=content.summary,
         body=content.body,
         image=content.image,

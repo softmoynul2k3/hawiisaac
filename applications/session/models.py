@@ -19,6 +19,7 @@ class WorkoutLog(models.Model):
     id = fields.IntField(pk=True)
     session = fields.ForeignKeyField("models.WorkoutSession", on_delete=fields.CASCADE, related_name="workout_logs")
     workout = fields.ForeignKeyField("models.Workout", on_delete=fields.CASCADE, related_name="workout_logs")
+    content = fields.ForeignKeyField("models.Content", on_delete=fields.SET_NULL, null=True, related_name="workout_logs")
     note = fields.TextField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 

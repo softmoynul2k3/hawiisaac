@@ -3,6 +3,7 @@ from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from tortoise.queryset import QuerySet
 from tortoise.functions import Avg
 
 from app.auth import login_required
@@ -101,6 +102,15 @@ def _serialize_cardio_log(cardio_log: CardioLog | None) -> CardioLogOut | None:
     )
 
 
+async def _resolve_cardio_log(workout_log: WorkoutLog) -> CardioLog | None:
+    cardio_log = getattr(workout_log, "cardio_log", None)
+    if cardio_log is None:
+        return None
+    if isinstance(cardio_log, QuerySet):
+        return await cardio_log.first()
+    return cardio_log
+
+
 def _serialize_set_log(set_log: SetLog) -> SetLogOut:
     return SetLogOut(
         id=set_log.id,
@@ -113,7 +123,8 @@ def _serialize_set_log(set_log: SetLog) -> SetLogOut:
     )
 
 
-def _serialize_workout_log(workout_log: WorkoutLog) -> WorkoutLogOut:
+async def _serialize_workout_log(workout_log: WorkoutLog) -> WorkoutLogOut:
+    cardio_log = await _resolve_cardio_log(workout_log)
     return WorkoutLogOut(
         id=workout_log.id,
         workout={
@@ -122,18 +133,18 @@ def _serialize_workout_log(workout_log: WorkoutLog) -> WorkoutLogOut:
         },
         note=workout_log.note,
         set_logs=[_serialize_set_log(set_log) for set_log in workout_log.set_logs],
-        cardio_log=_serialize_cardio_log(getattr(workout_log, "cardio_log", None)),
+        cardio_log=_serialize_cardio_log(cardio_log),
     )
 
 
-def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
+async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
     return WorkoutSessionOut(
         id=session.id,
         user_id=session.user_id,
         date=session.date,
         duration_minutes=session.duration_minutes,
         created_at=to_utc_z(session.created_at) or "",
-        workout_logs=[_serialize_workout_log(workout_log) for workout_log in session.workout_logs],
+        workout_logs=[await _serialize_workout_log(workout_log) for workout_log in session.workout_logs],
     )
 
 
@@ -146,7 +157,7 @@ async def create_session(payload: WorkoutSessionCreate, current_user: User = Dep
     )
 
     await session.fetch_related("workout_logs")
-    return _serialize_session(session)
+    return await _serialize_session(session)
 
 
 @router.get("/sessions", response_model=List[WorkoutSessionOut])
@@ -164,7 +175,7 @@ async def list_sessions(
         "workout_logs__cardio_log",
     ).offset(offset).limit(limit)
 
-    return [_serialize_session(session) for session in sessions]
+    return [await _serialize_session(session) for session in sessions]
 
 
 @router.post("/workout-log", response_model=WorkoutLogOut, status_code=status.HTTP_201_CREATED)
@@ -181,8 +192,8 @@ async def create_workout_log(payload: WorkoutLogCreate, current_user: User = Dep
         note=(payload.note or "").strip() or None,
     )
 
-    await workout_log.fetch_related("workout", "set_logs")
-    return _serialize_workout_log(workout_log)
+    await workout_log.fetch_related("workout", "content", "set_logs")
+    return await _serialize_workout_log(workout_log)
 
 
 @router.post("/set-log", response_model=SetLogOut, status_code=status.HTTP_201_CREATED)

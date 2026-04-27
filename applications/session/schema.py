@@ -67,6 +67,16 @@ class WorkoutSessionOut(BaseModel):
     workout_logs: List[WorkoutLogOut]
 
 
+class StartContentLogOut(BaseModel):
+    session: WorkoutSessionOut
+    first_workout_log: WorkoutLogOut
+
+
+class StartWorkoutLogOut(BaseModel):
+    session: WorkoutSessionOut
+    first_workout_log: WorkoutLogOut
+
+
 class ProgressSummaryOut(BaseModel):
     total_workouts: int
     total_sets: int
