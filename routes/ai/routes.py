@@ -7,6 +7,7 @@ import google.genai as genai
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from PIL import Image
 import io
+from openai import OpenAI
 
 from app.auth import login_required
 from app.config import settings
@@ -22,18 +23,75 @@ from applications.user.models import User
 
 router = APIRouter(tags=["AI Equipment Detection"])
 
-# Initialize Gemini API
-if not settings.GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in settings")
+# Initialize AI clients based on provider
+gemini_client = None
+openai_client = None
 
-client = genai.Client(api_key=settings.GEMINI_API_KEY)
+if settings.AI_PROVIDER == "gemini":
+    if not settings.GEMINI_API_KEY:
+        print("[AI] WARNING: GEMINI_API_KEY not found in settings. AI endpoints will not work until configured.")
+    else:
+        gemini_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+elif settings.AI_PROVIDER == "openai":
+    if not settings.OPENAI_API_KEY:
+        print("[AI] WARNING: OPENAI_API_KEY not found in settings. AI endpoints will not work until configured.")
+    else:
+        openai_client = OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+def _generate_ai_response(prompt: str, image=None) -> str:
+    """Generate AI response using configured provider"""
+    if settings.AI_PROVIDER == "openai":
+        if not openai_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="OpenAI client not configured. Set OPENAI_API_KEY in your environment."
+            )
+        if image:
+            buffered = io.BytesIO()
+            image.save(buffered, format="PNG")
+            img_str = base64.b64encode(buffered.getvalue()).decode()
+            
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img_str}"}}
+                    ]
+                }]
+            )
+            return response.choices[0].message.content
+        else:
+            response = openai_client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            return response.choices[0].message.content
+    else:
+        if not gemini_client:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Gemini client not configured. Set GEMINI_API_KEY in your environment."
+            )
+        if image:
+            response = gemini_client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=[prompt, image]
+            )
+        else:
+            response = gemini_client.models.generate_content(
+                model='gemini-2.0-flash',
+                contents=prompt
+            )
+        return response.text
 
 
 def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
     """Extract equipment names and confidence from AI response"""
     equipment_list = []
     
-    # Look for patterns like "Equipment: name (confidence)" or similar
     patterns = [
         r'Equipment:\s*([^(]+)\s*\((\d+(?:\.\d+)?)\)',
         r'(\w+(?:\s+\w+)*)\s*\((\d+(?:\.\d+)?)\)',
@@ -47,16 +105,15 @@ def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
             name = match[0].strip()
             confidence = float(match[1])
             if confidence > 1.0:
-                confidence = confidence / 100.0  # Convert percentage to decimal
+                confidence = confidence / 100.0
             
-            if name and confidence > 0.3:  # Filter low confidence detections
+            if name and confidence > 0.3:
                 equipment_list.append(EquipmentDetection(
                     name=name,
                     confidence=min(confidence, 1.0),
                     description=None
                 ))
     
-    # If no structured matches found, try to extract any equipment-related terms
     if not equipment_list:
         equipment_keywords = [
             'dumbbell', 'barbell', 'bench', 'squat', 'deadlift', 'press', 'curl',
@@ -64,7 +121,6 @@ def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
             'kettlebell', 'medicine ball', 'resistance band', 'pull up', 'dip'
         ]
         
-        words = response_text.lower().split()
         for keyword in equipment_keywords:
             if keyword in response_text.lower():
                 equipment_list.append(EquipmentDetection(
@@ -72,7 +128,7 @@ def _extract_equipment_names(response_text: str) -> List[EquipmentDetection]:
                     confidence=0.7,
                     description=None
                 ))
-                break  # Only add one if using fallback
+                break
     
     return equipment_list
 
@@ -92,14 +148,12 @@ async def scan_equipment_image(
     current_user: User = Depends(login_required)
 ):
     """
-    Scan an image to identify gym equipment using Gemini AI
+    Scan an image to identify gym equipment using AI
     """
     try:
-        # Decode base64 image
         image_data = base64.b64decode(payload.image_data)
         image = Image.open(io.BytesIO(image_data))
         
-        # Prepare prompt for equipment detection
         default_prompt = """
         Analyze this image and identify any gym equipment visible. 
         For each equipment found, provide the name and confidence level (0-1).
@@ -111,15 +165,8 @@ async def scan_equipment_image(
         """
         
         prompt = payload.prompt or default_prompt
+        response_text = _generate_ai_response(prompt, image)
         
-        # Generate response from Gemini
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=[prompt, image]
-        )
-        response_text = response.text
-        
-        # Extract equipment information
         equipment_list = _extract_equipment_names(response_text)
         primary_equipment = _get_primary_equipment(equipment_list)
         
@@ -157,21 +204,14 @@ async def get_equipment_info(
         Format the response clearly with each section labeled.
         """
         
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=prompt
-        )
-        response_text = response.text
+        response_text = _generate_ai_response(prompt)
         
-        # Parse the response (simple text parsing for now)
-        category = "Strength Training"  # Default
+        category = "Strength Training"
         muscle_groups = []
         description = response_text.split('\n')[0] if response_text else "Gym equipment"
         common_exercises = []
         
-        # Try to extract structured information
         lines = response_text.split('\n')
-        current_section = None
         
         for line in lines:
             line = line.strip().lower()
@@ -211,27 +251,22 @@ async def scan_equipment_image_upload(
     image: UploadFile = File(..., description="Image file to scan for equipment detection")
 ):
     """
-    Scan an uploaded image file to identify gym equipment using Gemini AI
+    Scan an uploaded image file to identify gym equipment using AI
     """
     try:
-        # Read uploaded file into memory
         image_bytes = await image.read()
         pil_image = Image.open(io.BytesIO(image_bytes))
 
-        # Generate response from Gemini
-        response = client.models.generate_content(
-            model='gemini-2.0-flash',
-            contents=["""Analyze this image and identify any gym equipment visible.
+        prompt = """Analyze this image and identify any gym equipment visible.
 For each equipment found, provide the name and confidence level (0-1).
 Focus on common gym equipment like dumbbells, barbells, benches, machines, etc.
 Format your response as a list with equipment names and confidence scores.
 Example format:
 Equipment: Dumbbell (0.95)
-Equipment: Bench Press (0.87)""", pil_image]
-        )
-        response_text = response.text
+Equipment: Bench Press (0.87)"""
+        
+        response_text = _generate_ai_response(prompt, pil_image)
 
-        # Extract equipment information
         equipment_list = _extract_equipment_names(response_text)
         primary_equipment = _get_primary_equipment(equipment_list)
 
