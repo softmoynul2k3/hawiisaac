@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 from typing import Optional
 import re
 
@@ -190,7 +190,7 @@ async def signup(
     email: str = Form(...),
     password: str = Form(...),
     gender: Optional[str] = Form(None),
-    dob: Optional[str] = Form(None),
+    dob: Optional[str] = Form(None, description="Date of birth in YYYY-MM-DD format (e.g., 2000-05-21)"),
     otp: str = Form(...),
 ):
     email = _normalize_email(email)
