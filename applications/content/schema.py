@@ -3,11 +3,12 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.utils.datetime_formatter import to_utc_z
-from applications.content.models import Content
+from applications.content.models import Content, ContentFeedType
 
 
 class ContentCreate(BaseModel):
     title: str
+    feed_type: ContentFeedType = ContentFeedType.BROWSE
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -17,6 +18,7 @@ class ContentCreate(BaseModel):
 
 class ContentUpdate(BaseModel):
     title: Optional[str] = None
+    feed_type: Optional[ContentFeedType] = None
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -27,6 +29,7 @@ class ContentUpdate(BaseModel):
 class ContentOut(BaseModel):
     id: int
     title: str
+    feed_type: ContentFeedType
     summary: Optional[str] = None
     body: Optional[str] = None
     image: Optional[str] = None
@@ -64,6 +67,7 @@ def serialize_content(content: Content) -> ContentOut:
     return ContentOut(
         id=content.id,
         title=content.title,
+        feed_type=content.feed_type,
         summary=content.summary,
         body=content.body,
         image=content.image,

@@ -1,9 +1,18 @@
+from enum import Enum
+
 from tortoise import fields, models
+
+
+class ContentFeedType(str, Enum):
+    FOR_YOU = "for_you"
+    BROWSE = "browse"
+    EXPERT_TIPS = "expert_tips"
 
 
 class Content(models.Model):
     id = fields.IntField(pk=True)
     title = fields.CharField(max_length=255)
+    feed_type = fields.CharEnumField(ContentFeedType, default=ContentFeedType.BROWSE, max_length=20)
     summary = fields.TextField(null=True)
     body = fields.TextField(null=True)
     image = fields.CharField(max_length=255, null=True)
