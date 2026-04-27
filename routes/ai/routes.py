@@ -18,6 +18,7 @@ from applications.ai.schema import (
     EquipmentInfoResponse,
     EquipmentScanRequest,
     EquipmentScanResponse,
+    RecommendedWorkout,
 )
 from applications.user.models import User
 
@@ -130,6 +131,29 @@ def _get_primary_equipment(equipment_list: List[EquipmentDetection]) -> Optional
     return primary.name if primary.confidence > 0.5 else None
 
 
+def _serialize_recommended_workout(workout) -> RecommendedWorkout:
+    equipment = getattr(workout, "equipment", None)
+    category = getattr(workout, "category", None)
+    return RecommendedWorkout(
+        id=workout.id,
+        name=workout.name,
+        description=workout.description,
+        sets=workout.sets,
+        reps=workout.reps,
+        rest=workout.rest,
+        banner=workout.banner,
+        video=workout.video,
+        equipment={
+            "id": equipment.id,
+            "name": equipment.name,
+        } if equipment else None,
+        category={
+            "id": category.id,
+            "name": category.name,
+        } if category else None,
+    )
+
+
 @router.post("/scan-equipment-upload", response_model=EquipmentScanResponse)
 async def scan_equipment_image_upload(
     image: UploadFile = File(..., description="Image file to scan for equipment detection")
@@ -138,7 +162,7 @@ async def scan_equipment_image_upload(
     Scan an uploaded image file to identify gym equipment from database
     """
     try:
-        from applications.equipments.models import Equipment
+        from applications.equipments.models import Equipment, Workout
         
         # Get all equipment from database
         equipment_list_db = await Equipment.all().values('id', 'name', 'description')
@@ -147,6 +171,7 @@ async def scan_equipment_image_upload(
             return EquipmentScanResponse(
                 success=False,
                 equipment_detected=[],
+                recommended_workouts=[],
                 error_message="No equipment found in database"
             )
         
@@ -175,6 +200,8 @@ Equipment: Bench Press (0.87)"""
                 success=True,
                 equipment_detected=[],
                 primary_equipment=None,
+                primary_equipment_id=None,
+                recommended_workouts=[],
                 error_message="This equipment is not found in this gym"
             )
 
@@ -184,10 +211,13 @@ Equipment: Bench Press (0.87)"""
         valid_equipment = []
         for eq in equipment_detected:
             # Case-insensitive matching
-            matched = next((db_eq for db_eq in equipment_list_db 
-                          if db_eq['name'].lower() == eq.name.lower()), None)
+            matched = next(
+                (db_eq for db_eq in equipment_list_db if db_eq['name'].lower() == eq.name.lower()),
+                None,
+            )
             if matched:
                 valid_equipment.append(EquipmentDetection(
+                    id=matched["id"],
                     name=matched['name'],
                     confidence=eq.confidence,
                     description=matched.get('description')
@@ -198,21 +228,37 @@ Equipment: Bench Press (0.87)"""
                 success=True,
                 equipment_detected=[],
                 primary_equipment=None,
+                primary_equipment_id=None,
+                recommended_workouts=[],
                 error_message="This equipment is not found in this gym"
             )
         
         primary_equipment = _get_primary_equipment(valid_equipment)
+        primary_equipment_item = next(
+            (equipment for equipment in valid_equipment if equipment.name == primary_equipment),
+            None,
+        )
+        recommended_workouts = []
+        if primary_equipment_item and primary_equipment_item.id is not None:
+            workouts = await Workout.filter(equipment_id=primary_equipment_item.id).prefetch_related(
+                "equipment",
+                "category",
+            ).limit(10)
+            recommended_workouts = [_serialize_recommended_workout(workout) for workout in workouts]
 
         return EquipmentScanResponse(
             success=True,
             equipment_detected=valid_equipment,
-            primary_equipment=primary_equipment
+            primary_equipment=primary_equipment,
+            primary_equipment_id=primary_equipment_item.id if primary_equipment_item else None,
+            recommended_workouts=recommended_workouts,
         )
 
     except Exception as e:
         return EquipmentScanResponse(
             success=False,
             equipment_detected=[],
+            recommended_workouts=[],
             error_message=f"Failed to process image: {str(e)}"
         )
 

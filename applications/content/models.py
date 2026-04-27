@@ -13,6 +13,7 @@ class Content(models.Model):
     id = fields.IntField(pk=True)
     title = fields.CharField(max_length=255)
     feed_type = fields.CharEnumField(ContentFeedType, default=ContentFeedType.BROWSE, max_length=20)
+    workouts = fields.ManyToManyField("models.Workout", related_name="contents", through="content_workouts")
     summary = fields.TextField(null=True)
     body = fields.TextField(null=True)
     image = fields.CharField(max_length=255, null=True)
