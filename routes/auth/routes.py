@@ -208,6 +208,8 @@ async def signup(
 
     if await User.get_or_none(email=email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if await User.get_or_none(username=username):
+        raise HTTPException(status_code=400, detail="Username already taken")
     
     gender = gender.strip() if gender else None
     dob = datetime.strptime(dob, "%Y-%m-%d").date() if dob else None
