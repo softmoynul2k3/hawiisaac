@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     MEDIA_ROOT: str = "media/"
     CREATE_DUMMY_DATA: bool = True
 
+    ACCESS_TOKEN_EXPIRE_MINUTES: int =10
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 30
+
     EMAIL_HOST: str = "smtp.gmail.com"
     EMAIL_PORT: int = 587
     EMAIL_HOST_USER: str = "lookuparchitecture@gmail.com"
