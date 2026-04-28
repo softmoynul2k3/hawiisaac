@@ -148,7 +148,6 @@ async def list_contents(
     feed_filter = _parse_feed_filter(feed)
     type_filter = _parse_type_filter(type)
     queryset = Content.all()
-    workouts = await Workout.all().prefetch_related("category", "equipment", "muscle_groups")
     can_view_inactive = await _can_view_inactive_content(current_user)
 
     if search:
