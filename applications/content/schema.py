@@ -3,12 +3,13 @@ from typing import Optional
 from pydantic import BaseModel
 
 from app.utils.datetime_formatter import to_utc_z
-from applications.content.models import Content, ContentFeedType
+from applications.content.models import Content, ContentFeedType, ContentType
 
 
 class ContentCreate(BaseModel):
     title: str
     feed_type: ContentFeedType = ContentFeedType.BROWSE
+    type: ContentType = ContentType.WARMUP
     workout_ids: list[int] = []
     summary: Optional[str] = None
     body: Optional[str] = None
@@ -20,6 +21,7 @@ class ContentCreate(BaseModel):
 class ContentUpdate(BaseModel):
     title: Optional[str] = None
     feed_type: Optional[ContentFeedType] = None
+    type: Optional[ContentType] = None
     workout_ids: Optional[list[int]] = None
     summary: Optional[str] = None
     body: Optional[str] = None
@@ -32,6 +34,7 @@ class ContentOut(BaseModel):
     id: int
     title: str
     feed_type: ContentFeedType
+    type: ContentType
     workouts: list[dict] = []
     summary: Optional[str] = None
     body: Optional[str] = None
@@ -77,6 +80,7 @@ def serialize_content(content: Content) -> ContentOut:
         id=content.id,
         title=content.title,
         feed_type=content.feed_type,
+        type=content.type,
         workouts=[
             {
                 "id": workout.id,
