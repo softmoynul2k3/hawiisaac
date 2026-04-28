@@ -11,6 +11,7 @@ from applications.content.models import (
     ContentFeedType,
     ContentReaction,
     ContentShare,
+    ContentType,
     ContentView,
 )
 from applications.content.schema import (
@@ -69,6 +70,21 @@ def _parse_feed_filter(feed: Optional[str]) -> Optional[str]:
     )
 
 
+def _parse_type_filter(content_type: Optional[str]) -> Optional[str]:
+    if not content_type:
+        return None
+
+    normalized = content_type.strip().lower().replace(" ", "_").replace("-", "_")
+    valid_values = {member.value for member in ContentType}
+    if normalized in valid_values:
+        return normalized
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"Invalid type filter. Use {', '.join(sorted(valid_values))}.",
+    )
+
+
 async def _can_view_inactive_content(current_user: Optional[User]) -> bool:
     if current_user is None:
         return False
@@ -97,6 +113,7 @@ async def create_content(payload: ContentCreate):
     content = await Content.create(
         title=title,
         feed_type=payload.feed_type,
+        type=payload.type,
         summary=_clean_optional_text(payload.summary),
         body=_clean_optional_text(payload.body),
         image=_clean_optional_text(payload.image),
@@ -115,11 +132,13 @@ async def list_contents(
     search: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
     feed: Optional[str] = Query(None, description="for_you, browse, expert_tips, or trending"),
+    type: Optional[str] = Query(None, description="warmup or forhome"),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     current_user: Optional[User] = Depends(get_user_or_none),
 ):
     feed_filter = _parse_feed_filter(feed)
+    type_filter = _parse_type_filter(type)
     queryset = Content.all()
     workouts = await Workout.all().prefetch_related("category", "equipment", "muscle_groups")
     can_view_inactive = await _can_view_inactive_content(current_user)
@@ -136,6 +155,9 @@ async def list_contents(
 
     if feed_filter and feed_filter != "trending":
         queryset = queryset.filter(feed_type=feed_filter)
+
+    if type_filter:
+        queryset = queryset.filter(type=type_filter)
 
     if feed_filter == "trending":
         contents = [await _attach_summary(content) for content in await queryset]
@@ -185,6 +207,8 @@ async def update_content(content_id: int, payload: ContentUpdate):
         content.title = _clean_required_text(payload.title, "Title")
     if payload.feed_type is not None:
         content.feed_type = payload.feed_type
+    if payload.type is not None:
+        content.type = payload.type
     if payload.summary is not None:
         content.summary = _clean_optional_text(payload.summary)
     if payload.body is not None:
