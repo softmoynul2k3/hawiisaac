@@ -407,10 +407,10 @@ async def get_active_session(current_user: User = Depends(login_required)):
     if active_session is None:
         raise HTTPException(status_code=404, detail="Active session not found")
     active_session = await _update_session_progress(active_session)
-    current_item = _get_current_session_workout_from_loaded_session(active_session)
+    # current_item = _get_current_session_workout_from_loaded_session(active_session)
     return ActiveSessionOut(
         session=await _serialize_session(active_session),
-        current_session_workout=await _serialize_session_workout(current_item) if current_item else None,
+        # current_session_workout=await _serialize_session_workout(current_item) if current_item else None,
     )
 
 
@@ -421,7 +421,7 @@ async def get_session(session_id: int, current_user: User = Depends(login_requir
     return await _serialize_session(session)
 
 
-@router.post("/sessions/{session_id}/workouts", response_model=SessionWorkoutOut, status_code=status.HTTP_201_CREATED)
+# @router.post("/sessions/{session_id}/workouts", response_model=SessionWorkoutOut, status_code=status.HTTP_201_CREATED)
 async def add_session_workout(
     session_id: int,
     payload: SessionWorkoutCreate,
@@ -445,7 +445,7 @@ async def add_session_workout(
     return await _serialize_session_workout(created_item)
 
 
-@router.post("/session-workouts/{session_workout_id}/complete", response_model=SessionWorkoutOut)
+# @router.post("/session-workouts/{session_workout_id}/complete", response_model=SessionWorkoutOut)
 async def complete_session_workout(
     session_workout_id: int,
     payload: SessionWorkoutComplete,
