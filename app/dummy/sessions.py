@@ -3,7 +3,7 @@ from datetime import date, timedelta
 from tortoise.transactions import in_transaction
 
 from applications.equipments.models import Workout
-from applications.session.models import CardioLog, SetLog, WorkoutLog, WorkoutSession
+from applications.session.models import CardioLog, SessionStatus, SessionWorkout, SetLog, WorkoutSession
 from applications.user.models import User
 
 
@@ -149,7 +149,7 @@ SESSION_DATA = [
 
 async def create_test_sessions():
     session_created = 0
-    workout_log_created = 0
+    session_workout_created = 0
     set_log_created = 0
     cardio_log_created = 0
 
@@ -177,42 +177,67 @@ async def create_test_sessions():
                     session, created = await WorkoutSession.get_or_create(
                         user=user,
                         date=session_item["date"],
-                        defaults={"duration_minutes": session_item["duration_minutes"]},
+                        defaults={
+                            "duration_minutes": session_item["duration_minutes"],
+                            "status": SessionStatus.COMPLETED,
+                            "current_workout_order": 0,
+                        },
                         using_db=conn,
                     )
 
                     if created:
                         session_created += 1
-                    elif session.duration_minutes != session_item["duration_minutes"]:
+                    updated_session = False
+                    if session.duration_minutes != session_item["duration_minutes"]:
                         session.duration_minutes = session_item["duration_minutes"]
+                        updated_session = True
+                    if session.status != SessionStatus.COMPLETED:
+                        session.status = SessionStatus.COMPLETED
+                        updated_session = True
+                    if session.current_workout_order != 0:
+                        session.current_workout_order = 0
+                        updated_session = True
+                    if updated_session:
                         await session.save(using_db=conn)
 
-                    for log_item in session_item["logs"]:
+                    for index, log_item in enumerate(session_item["logs"], start=1):
                         workout = workouts_by_name.get(log_item["workout"])
                         if not workout:
                             print(f"[dummy-session] skipped missing workout: {log_item['workout']}")
                             continue
 
-                        workout_log, log_created = await WorkoutLog.get_or_create(
+                        session_workout, workout_created = await SessionWorkout.get_or_create(
                             session=session,
+                            order=index,
                             workout=workout,
-                            defaults={"note": log_item.get("note")},
+                            defaults={
+                                "note": log_item.get("note"),
+                                "is_completed": True,
+                            },
                             using_db=conn,
                         )
 
-                        if log_created:
-                            workout_log_created += 1
-                        elif workout_log.note != log_item.get("note"):
-                            workout_log.note = log_item.get("note")
-                            await workout_log.save(using_db=conn)
+                        if workout_created:
+                            session_workout_created += 1
+                        else:
+                            updated = False
+                            if session_workout.note != log_item.get("note"):
+                                session_workout.note = log_item.get("note")
+                                updated = True
+                            if not session_workout.is_completed:
+                                session_workout.is_completed = True
+                                updated = True
+                            if updated:
+                                await session_workout.save(using_db=conn)
 
                         for set_item in log_item.get("sets", []):
                             set_log, set_created = await SetLog.get_or_create(
-                                workout_log=workout_log,
+                                session_workout=session_workout,
                                 order=set_item["order"],
                                 defaults={
                                     "weight": set_item["weight"],
                                     "reps": set_item["reps"],
+                                    "duration_seconds": set_item.get("duration_seconds", 0),
                                     "is_completed": set_item["is_completed"],
                                 },
                                 using_db=conn,
@@ -222,8 +247,13 @@ async def create_test_sessions():
                                 set_log_created += 1
                             else:
                                 updated = False
-                                for field in ("weight", "reps", "is_completed"):
-                                    expected = set_item[field]
+                                expected_values = {
+                                    "weight": set_item["weight"],
+                                    "reps": set_item["reps"],
+                                    "duration_seconds": set_item.get("duration_seconds", 0),
+                                    "is_completed": set_item["is_completed"],
+                                }
+                                for field, expected in expected_values.items():
                                     if getattr(set_log, field) != expected:
                                         setattr(set_log, field, expected)
                                         updated = True
@@ -233,8 +263,12 @@ async def create_test_sessions():
                         cardio_item = log_item.get("cardio")
                         if cardio_item:
                             cardio_log, cardio_created = await CardioLog.get_or_create(
-                                workout_log=workout_log,
-                                defaults=cardio_item,
+                                session_workout=session_workout,
+                                defaults={
+                                    **cardio_item,
+                                    "calories_burned": cardio_item.get("calories_burned", 0),
+                                    "user_weight_kg": cardio_item.get("user_weight_kg"),
+                                },
                                 using_db=conn,
                             )
 
@@ -242,7 +276,12 @@ async def create_test_sessions():
                                 cardio_log_created += 1
                             else:
                                 updated = False
-                                for field, expected in cardio_item.items():
+                                merged_cardio = {
+                                    **cardio_item,
+                                    "calories_burned": cardio_item.get("calories_burned", 0),
+                                    "user_weight_kg": cardio_item.get("user_weight_kg"),
+                                }
+                                for field, expected in merged_cardio.items():
                                     if getattr(cardio_log, field) != expected:
                                         setattr(cardio_log, field, expected)
                                         updated = True
@@ -251,7 +290,7 @@ async def create_test_sessions():
 
         print(
             "[dummy-session] seeding completed "
-            f"(sessions_created={session_created}, workout_logs_created={workout_log_created}, "
+            f"(sessions_created={session_created}, session_workouts_created={session_workout_created}, "
             f"set_logs_created={set_log_created}, cardio_logs_created={cardio_log_created})"
         )
     except Exception as error:

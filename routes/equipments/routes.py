@@ -15,7 +15,9 @@ from applications.session.models import WorkoutSession
 from applications.session.schema import StartWorkoutLogOut
 from applications.user.models import User
 from routes.sessions.routes import (
+    _create_or_reuse_active_session,
     _create_session_workout,
+    _get_current_session_workout_from_loaded_session,
     _load_full_session,
     _serialize_session,
     _serialize_session_workout,
@@ -218,11 +220,17 @@ async def start_workout_log(
         if linked_workout_ids and workout.id not in linked_workout_ids:
             raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
 
-    session = await WorkoutSession.create(
-        user=current_user,
+    session, created = await _create_or_reuse_active_session(
+        current_user,
         date=date.today(),
         duration_minutes=1,
     )
+    if not created:
+        current_item = _get_current_session_workout_from_loaded_session(session)
+        return StartWorkoutLogOut(
+            session=await _serialize_session(session),
+            first_session_workout=await _serialize_session_workout(current_item) if current_item else None,
+        )
     session_workout = await _create_session_workout(
         session,
         workout.id,

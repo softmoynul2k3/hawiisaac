@@ -49,6 +49,24 @@ class ContentOut(BaseModel):
     view_count: int = 0
 
 
+class ContentListItemOut(BaseModel):
+    id: int
+    title: str
+    feed_type: ContentFeedType
+    type: ContentType
+    summary: Optional[str] = None
+    body: Optional[str] = None
+    image: Optional[str] = None
+    video: Optional[str] = None
+    is_active: bool
+    created_at: str
+    updated_at: str
+    bookmark_count: int = 0
+    share_count: int = 0
+    reaction_count: int = 0
+    view_count: int = 0
+
+
 class ContentSummaryOut(BaseModel):
     content_id: int
     bookmark_count: int
@@ -58,7 +76,7 @@ class ContentSummaryOut(BaseModel):
 
 
 class ContentListWithWorkoutsOut(BaseModel):
-    contents: list[ContentOut]
+    contents: list[ContentListItemOut]
     workouts: list[dict]
 
 
@@ -93,6 +111,26 @@ def serialize_content(content: Content) -> ContentOut:
             }
             for workout in workouts
         ],
+        summary=content.summary,
+        body=content.body,
+        image=content.image,
+        video=content.video,
+        is_active=content.is_active,
+        created_at=to_utc_z(content.created_at) or "",
+        updated_at=to_utc_z(content.updated_at) or "",
+        bookmark_count=getattr(content, "bookmark_count", 0) or 0,
+        share_count=getattr(content, "share_count", 0) or 0,
+        reaction_count=getattr(content, "reaction_count", 0) or 0,
+        view_count=getattr(content, "view_count", 0) or 0,
+    )
+
+
+def serialize_content_list_item(content: Content) -> ContentListItemOut:
+    return ContentListItemOut(
+        id=content.id,
+        title=content.title,
+        feed_type=content.feed_type,
+        type=content.type,
         summary=content.summary,
         body=content.body,
         image=content.image,

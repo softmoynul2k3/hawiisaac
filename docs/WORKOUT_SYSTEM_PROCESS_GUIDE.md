@@ -12,8 +12,25 @@ There are 2 ways a user starts workout:
 - one user creates one `session`
 - one session can contain one or many `workouts`
 - each workout inside session is a `session_workout`
+- only one `active` session is allowed per user
 - if workout type is `non_cardio`, save progress with `POST /set-log`
 - if workout type is `cardio`, save progress with `POST /cardio-log`
+
+## App open / resume flow
+
+Frontend should first call:
+
+`GET /sessions/active`
+
+If active session exists:
+
+- backend returns the active session
+- backend returns the current workout as `current_session_workout`
+- backend resumes from `current_workout_order`
+
+If no active session exists:
+
+- backend returns `404 Active session not found`
 
 ## Flow 1: Scan equipment -> select workout
 
@@ -62,6 +79,11 @@ Frontend calls:
 Example:
 
 `POST /workout/21/start-log`
+
+Before creating new session:
+
+- backend checks existing active session
+- if active session exists, backend returns that existing session instead of creating new one
 
 Response example:
 
@@ -159,6 +181,11 @@ Response:
 }
 ```
 
+If same `session_workout_id` + same `order` is sent again:
+
+- backend updates existing set log
+- backend does not create duplicate log
+
 If `workout_type = cardio`, use:
 
 `POST /cardio-log`
@@ -190,6 +217,11 @@ Response:
 }
 ```
 
+If cardio log already exists for that `session_workout_id`:
+
+- backend updates the existing cardio log
+- backend does not create duplicate cardio log
+
 ### Step 4: Mark workout complete
 
 Frontend calls:
@@ -204,6 +236,12 @@ Example:
   "mark_session_complete_if_finished": true
 }
 ```
+
+Backend validation before complete:
+
+- if workout is `non_cardio`, at least 1 set log must exist
+- if workout is `cardio`, cardio log must exist
+- if no logs exist, backend rejects with `Cannot complete workout without logs`
 
 ### Step 5: Finish session
 
@@ -220,6 +258,12 @@ Example:
 }
 ```
 
+Backend validation before log create or workout complete:
+
+- backend fetches session from `session_workout_id`
+- if `session.status != active`
+- reject with `Session is already completed`
+
 ## Flow 2: Click content -> multiple workouts
 
 ### Step 1: User clicks content
@@ -233,6 +277,11 @@ Frontend calls:
 Example:
 
 `POST /contents/12/start-log`
+
+Before creating new session:
+
+- backend checks existing active session
+- if active session exists, backend returns that existing session instead of creating new one
 
 Response example:
 
@@ -433,10 +482,17 @@ If frontend wants to create a session directly with many workouts:
 }
 ```
 
+If user already has active session:
+
+- backend returns that active session
+- backend does not create a second active session
+
 ## Simple frontend rule
 
 - use `first_session_workout` to open first screen
+- on app open call `GET /sessions/active`
 - use `session.workouts` to know all remaining workouts
+- use `session.current_workout_order` to resume current workout
 - use `set-log` only for `non_cardio`
 - use `cardio-log` only for `cardio`
 - after each workout, call complete API
