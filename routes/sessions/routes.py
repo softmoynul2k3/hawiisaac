@@ -355,7 +355,7 @@ async def _mark_session_complete_if_needed(session: WorkoutSession):
     await _update_session_progress(session)
 
 
-@router.post("/sessions", response_model=WorkoutSessionOut, status_code=status.HTTP_201_CREATED)
+# @router.post("/sessions", response_model=WorkoutSessionOut, status_code=status.HTTP_201_CREATED)
 async def create_session(payload: WorkoutSessionCreate, current_user: User = Depends(login_required)):
     active_session = await _get_active_session_for_user(current_user.id)
     if active_session is not None:
