@@ -204,21 +204,21 @@ async def get_workout(workout_id: int):
 @router.post("/{workout_id}/start-log", response_model=StartWorkoutLogOut, status_code=status.HTTP_201_CREATED)
 async def start_workout_log(
     workout_id: int,
-    content_id: Optional[int] = Query(None),
+    # content_id: Optional[int] = Query(None),
     current_user: User = Depends(login_required),
 ):
     workout = await Workout.get_or_none(id=workout_id).prefetch_related("equipment", "category", "muscle_groups")
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
 
-    content = None
-    if content_id is not None:
-        content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
-        if not content:
-            raise HTTPException(status_code=404, detail="Content not found")
-        linked_workout_ids = {item.id for item in content.workouts}
-        if linked_workout_ids and workout.id not in linked_workout_ids:
-            raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
+    # content = None
+    # if content_id is not None:
+    #     content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
+    #     if not content:
+    #         raise HTTPException(status_code=404, detail="Content not found")
+    #     linked_workout_ids = {item.id for item in content.workouts}
+    #     if linked_workout_ids and workout.id not in linked_workout_ids:
+    #         raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
 
     session, created = await _create_or_reuse_active_session(
         current_user,
@@ -234,7 +234,7 @@ async def start_workout_log(
     session_workout = await _create_session_workout(
         session,
         workout.id,
-        content_id=content.id if content else None,
+        # content_id=content.id if content else None,
         note=f"Started workout: {workout.name}",
         order=1,
     )
