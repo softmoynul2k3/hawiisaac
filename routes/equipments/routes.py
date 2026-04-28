@@ -6,15 +6,20 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, 
 from tortoise.expressions import Q
 
 from app.auth import login_required, permission_required
-from app.utils.datetime_formatter import to_utc_z
 from app.utils.file_manager import save_file, update_file, delete_file
 
 from applications.content.models import Content
-from applications.equipments.models import Workout, Category, Equipment, MuscleGroups
+from applications.equipments.models import Workout, Category, Equipment, MuscleGroups, WorkoutType
 from applications.equipments.schema import serialize_workout
-from applications.session.models import WorkoutLog, WorkoutSession
+from applications.session.models import WorkoutSession
 from applications.session.schema import StartWorkoutLogOut
 from applications.user.models import User
+from routes.sessions.routes import (
+    _create_session_workout,
+    _load_full_session,
+    _serialize_session,
+    _serialize_session_workout,
+)
 
 
 router = APIRouter(prefix="/workout", tags=["Workout"])
@@ -80,30 +85,6 @@ async def _parse_muscle_group_ids(muscle_group_ids: Optional[str]) -> Optional[L
     return [muscle_groups_by_id[item] for item in unique_ids]
 
 
-def _serialize_started_workout_log(workout_log: WorkoutLog) -> dict:
-    return {
-        "id": workout_log.id,
-        "workout": {
-            "id": workout_log.workout.id,
-            "name": workout_log.workout.name,
-        },
-        "note": workout_log.note,
-        "set_logs": [],
-        "cardio_log": None,
-    }
-
-
-def _serialize_started_session(session: WorkoutSession, workout_log: WorkoutLog) -> dict:
-    return {
-        "id": session.id,
-        "user_id": session.user_id,
-        "date": session.date,
-        "duration_minutes": session.duration_minutes,
-        "created_at": to_utc_z(session.created_at) or "",
-        "workout_logs": [_serialize_started_workout_log(workout_log)],
-    }
-
-
 # ---------------- CREATE ----------------
 
 @router.post(
@@ -117,6 +98,8 @@ async def create_workout(
     muscle_group_ids: Optional[str] = Form(None),
     name: str = Form(...),
     description: Optional[str] = Form(None),
+    workout_type: WorkoutType = Form(WorkoutType.NON_CARDIO),
+    met_value: Optional[float] = Form(None),
 
     sets: str = Form(...),
     reps: str = Form(...),
@@ -148,6 +131,8 @@ async def create_workout(
         name=name,
         description=_normalize_optional_text(description),
         tags=_normalize_optional_text(tags),
+        workout_type=workout_type,
+        met_value=met_value if met_value is not None else (8.0 if workout_type == WorkoutType.CARDIO else 5.0),
         sets=_normalize_required_text(sets, "Sets"),
         reps=_normalize_required_text(reps, "Reps"),
         rest=_normalize_required_text(rest, "Rest"),
@@ -238,17 +223,19 @@ async def start_workout_log(
         date=date.today(),
         duration_minutes=1,
     )
-    workout_log = await WorkoutLog.create(
-        session=session,
-        workout=workout,
-        content=content,
+    session_workout = await _create_session_workout(
+        session,
+        workout.id,
+        content_id=content.id if content else None,
         note=f"Started workout: {workout.name}",
+        order=1,
     )
-    await workout_log.fetch_related("workout", "content")
+    session = await _load_full_session(session.id)
+    created_item = next(item for item in session.workouts if item.id == session_workout.id)
 
     return StartWorkoutLogOut(
-        session=_serialize_started_session(session, workout_log),
-        first_workout_log=_serialize_started_workout_log(workout_log),
+        session=await _serialize_session(session),
+        first_session_workout=await _serialize_session_workout(created_item),
     )
 
 
@@ -268,6 +255,8 @@ async def update_workout(
 
     name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
+    workout_type: Optional[WorkoutType] = Form(None),
+    met_value: Optional[float] = Form(None),
 
     sets: Optional[str] = Form(None),
     reps: Optional[str] = Form(None),
@@ -307,6 +296,14 @@ async def update_workout(
 
     if description is not None:
         workout.description = _normalize_optional_text(description)
+
+    if workout_type is not None:
+        workout.workout_type = workout_type
+        if met_value is None:
+            workout.met_value = 8.0 if workout_type == WorkoutType.CARDIO else 5.0
+
+    if met_value is not None:
+        workout.met_value = met_value
 
     if sets is not None:
         workout.sets = _normalize_required_text(sets, "Sets")

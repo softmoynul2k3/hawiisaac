@@ -65,6 +65,8 @@ async def serialize_workout(equipment: Workout) -> Dict[str, Any]:
             for muscle_group in equipment.muscle_groups
         ],
         "tags": equipment.tags,
+        "workout_type": equipment.workout_type,
+        "met_value": equipment.met_value,
         "sets": equipment.sets,
         "reps": equipment.reps,
         "rest": equipment.rest,

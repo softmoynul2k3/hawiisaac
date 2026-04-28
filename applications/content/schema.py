@@ -85,6 +85,8 @@ def serialize_content(content: Content) -> ContentOut:
             {
                 "id": workout.id,
                 "name": workout.name,
+                "workout_type": workout.workout_type,
+                "met_value": workout.met_value,
                 "sets": workout.sets,
                 "reps": workout.reps,
                 "rest": workout.rest,

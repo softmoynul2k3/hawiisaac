@@ -1,25 +1,29 @@
 from collections import defaultdict
+from datetime import datetime, timezone
 from typing import List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from tortoise.queryset import QuerySet
 from tortoise.functions import Avg
+from tortoise.queryset import QuerySet
 
 from app.auth import login_required
 from app.utils.datetime_formatter import to_utc_z
-from applications.equipments.models import Workout
-from applications.session.models import CardioLog, SetLog, WorkoutLog, WorkoutSession
+from applications.content.models import Content
+from applications.equipments.models import Workout, WorkoutType
+from applications.session.models import CardioLog, SessionStatus, SessionWorkout, SetLog, WorkoutSession
 from applications.session.schema import (
     CardioLogCreate,
     CardioLogOut,
     ProgressBestOut,
     ProgressChartPoint,
     ProgressSummaryOut,
+    SessionComplete,
+    SessionWorkoutComplete,
+    SessionWorkoutCreate,
+    SessionWorkoutOut,
     SetLogCreate,
     SetLogOut,
-    WorkoutLogCreate,
-    WorkoutLogOut,
     WorkoutSessionCreate,
     WorkoutSessionOut,
 )
@@ -27,6 +31,10 @@ from applications.user.models import User
 
 
 router = APIRouter(tags=["Workout Sessions"])
+
+
+def _utc_now():
+    return datetime.now(timezone.utc)
 
 
 async def _allowed_session_access(current_user: User, target_user: User, action: str) -> bool:
@@ -70,15 +78,15 @@ async def _get_accessible_session(session_id: int, current_user: User, action: s
     return session
 
 
-async def _get_accessible_workout_log(workout_log_id: int, current_user: User, action: str) -> WorkoutLog:
-    workout_log = await WorkoutLog.get_or_none(id=workout_log_id).prefetch_related("session__user", "workout")
-    if not workout_log:
-        raise HTTPException(status_code=404, detail="Workout log not found")
+async def _get_accessible_session_workout(session_workout_id: int, current_user: User, action: str) -> SessionWorkout:
+    session_workout = await SessionWorkout.get_or_none(id=session_workout_id).prefetch_related("session__user", "workout")
+    if not session_workout:
+        raise HTTPException(status_code=404, detail="Session workout not found")
 
-    if not await _allowed_session_access(current_user, workout_log.session.user, action):
+    if not await _allowed_session_access(current_user, session_workout.session.user, action):
         raise HTTPException(status_code=403, detail="Permission denied.")
 
-    return workout_log
+    return session_workout
 
 
 def _set_volume(weight: float, reps: int) -> float:
@@ -87,6 +95,15 @@ def _set_volume(weight: float, reps: int) -> float:
 
 def _one_rm(weight: float, reps: int) -> float:
     return round(weight * (1 + (reps / 30)), 2)
+
+
+def _resolve_weight_kg(session: WorkoutSession, explicit_weight_kg: Optional[float] = None) -> float:
+    return round(float(explicit_weight_kg or session.user_weight_kg or 70.0), 2)
+
+
+def _calculate_calories_burned(met_value: float, time_minutes: float, user_weight_kg: float) -> float:
+    calories = (met_value * 3.5 * user_weight_kg / 200) * time_minutes
+    return round(calories, 2)
 
 
 def _serialize_cardio_log(cardio_log: CardioLog | None) -> CardioLogOut | None:
@@ -99,11 +116,13 @@ def _serialize_cardio_log(cardio_log: CardioLog | None) -> CardioLogOut | None:
         distance=cardio_log.distance,
         speed=cardio_log.speed,
         incline=cardio_log.incline,
+        calories_burned=round(cardio_log.calories_burned, 2),
+        user_weight_kg=cardio_log.user_weight_kg,
     )
 
 
-async def _resolve_cardio_log(workout_log: WorkoutLog) -> CardioLog | None:
-    cardio_log = getattr(workout_log, "cardio_log", None)
+async def _resolve_cardio_log(session_workout: SessionWorkout) -> CardioLog | None:
+    cardio_log = getattr(session_workout, "cardio_log", None)
     if cardio_log is None:
         return None
     if isinstance(cardio_log, QuerySet):
@@ -117,23 +136,48 @@ def _serialize_set_log(set_log: SetLog) -> SetLogOut:
         weight=set_log.weight,
         reps=set_log.reps,
         order=set_log.order,
+        duration_seconds=set_log.duration_seconds,
         is_completed=set_log.is_completed,
         volume=_set_volume(set_log.weight, set_log.reps),
         one_rm=_one_rm(set_log.weight, set_log.reps),
     )
 
 
-async def _serialize_workout_log(workout_log: WorkoutLog) -> WorkoutLogOut:
-    cardio_log = await _resolve_cardio_log(workout_log)
-    return WorkoutLogOut(
-        id=workout_log.id,
-        workout={
-            "id": workout_log.workout.id,
-            "name": workout_log.workout.name,
-        },
-        note=workout_log.note,
-        set_logs=[_serialize_set_log(set_log) for set_log in workout_log.set_logs],
+def _serialize_workout_reference(workout: Workout) -> dict:
+    return {
+        "id": workout.id,
+        "name": workout.name,
+        "workout_type": workout.workout_type,
+        "met_value": workout.met_value,
+        "sets": workout.sets,
+        "reps": workout.reps,
+        "rest": workout.rest,
+    }
+
+
+async def _serialize_session_workout(session_workout: SessionWorkout) -> SessionWorkoutOut:
+    cardio_log = await _resolve_cardio_log(session_workout)
+    return SessionWorkoutOut(
+        id=session_workout.id,
+        order=session_workout.order,
+        workout=_serialize_workout_reference(session_workout.workout),
+        content={
+            "id": session_workout.content.id,
+            "title": session_workout.content.title,
+        } if session_workout.content else None,
+        note=session_workout.note,
+        is_completed=session_workout.is_completed,
+        estimated_calories_burned=round(session_workout.estimated_calories_burned, 2),
+        actual_calories_burned=round(session_workout.actual_calories_burned, 2),
+        set_logs=[_serialize_set_log(set_log) for set_log in session_workout.set_logs],
         cardio_log=_serialize_cardio_log(cardio_log),
+    )
+
+
+def _session_total_calories(session: WorkoutSession) -> float:
+    return round(
+        sum((workout.actual_calories_burned or workout.estimated_calories_burned or 0) for workout in session.workouts),
+        2,
     )
 
 
@@ -143,9 +187,94 @@ async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
         user_id=session.user_id,
         date=session.date,
         duration_minutes=session.duration_minutes,
+        note=session.note,
+        user_weight_kg=session.user_weight_kg,
+        status=session.status,
+        total_calories_burned=_session_total_calories(session),
         created_at=to_utc_z(session.created_at) or "",
-        workout_logs=[await _serialize_workout_log(workout_log) for workout_log in session.workout_logs],
+        updated_at=to_utc_z(session.updated_at) or "",
+        completed_at=to_utc_z(session.completed_at),
+        workouts=[await _serialize_session_workout(session_workout) for session_workout in session.workouts],
     )
+
+
+async def _load_full_session(session_id: int) -> WorkoutSession:
+    session = await WorkoutSession.get(id=session_id).prefetch_related(
+        "workouts__workout",
+        "workouts__content",
+        "workouts__set_logs",
+        "workouts__cardio_log",
+    )
+    session.workouts = sorted(list(session.workouts), key=lambda item: (item.order, item.id))
+    for item in session.workouts:
+        item.set_logs = sorted(list(item.set_logs), key=lambda set_log: (set_log.order, set_log.id))
+    return session
+
+
+async def _create_session_workout(
+    session: WorkoutSession,
+    workout_id: int,
+    *,
+    content_id: Optional[int] = None,
+    note: Optional[str] = None,
+    order: Optional[int] = None,
+) -> SessionWorkout:
+    workout = await Workout.get_or_none(id=workout_id)
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    content = None
+    if content_id is not None:
+        content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
+        if not content:
+            raise HTTPException(status_code=404, detail="Content not found")
+        linked_workout_ids = {item.id for item in content.workouts}
+        if linked_workout_ids and workout.id not in linked_workout_ids:
+            raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
+
+    if order is None:
+        last_item = await SessionWorkout.filter(session_id=session.id).order_by("-order").first()
+        order = 1 if last_item is None else last_item.order + 1
+    elif await SessionWorkout.filter(session_id=session.id, order=order).exists():
+        raise HTTPException(status_code=400, detail="Workout order already exists in this session")
+
+    return await SessionWorkout.create(
+        session=session,
+        workout=workout,
+        content=content,
+        order=order,
+        note=(note or "").strip() or None,
+    )
+
+
+async def _refresh_session_workout_calories(session_workout: SessionWorkout) -> SessionWorkout:
+    await session_workout.fetch_related("session", "workout", "set_logs", "cardio_log")
+
+    if session_workout.workout.workout_type == WorkoutType.CARDIO:
+        cardio_log = await _resolve_cardio_log(session_workout)
+        session_workout.estimated_calories_burned = 0
+        session_workout.actual_calories_burned = round(cardio_log.calories_burned, 2) if cardio_log else 0
+    else:
+        total_seconds = sum(set_log.duration_seconds for set_log in session_workout.set_logs if set_log.is_completed)
+        minutes = total_seconds / 60 if total_seconds else 0
+        weight_kg = _resolve_weight_kg(session_workout.session)
+        session_workout.estimated_calories_burned = _calculate_calories_burned(
+            session_workout.workout.met_value,
+            minutes,
+            weight_kg,
+        ) if minutes else 0
+        session_workout.actual_calories_burned = 0
+
+    await session_workout.save(update_fields=["estimated_calories_burned", "actual_calories_burned", "updated_at"])
+    return session_workout
+
+
+async def _mark_session_complete_if_needed(session: WorkoutSession):
+    remaining = await SessionWorkout.filter(session_id=session.id, is_completed=False).count()
+    if remaining == 0:
+        session.status = SessionStatus.COMPLETED
+        session.completed_at = _utc_now()
+        await session.save(update_fields=["status", "completed_at", "updated_at"])
 
 
 @router.post("/sessions", response_model=WorkoutSessionOut, status_code=status.HTTP_201_CREATED)
@@ -154,9 +283,20 @@ async def create_session(payload: WorkoutSessionCreate, current_user: User = Dep
         user=current_user,
         date=payload.date,
         duration_minutes=payload.duration_minutes,
+        note=(payload.note or "").strip() or None,
+        user_weight_kg=payload.user_weight_kg,
     )
 
-    await session.fetch_related("workout_logs")
+    for index, item in enumerate(payload.workouts, start=1):
+        await _create_session_workout(
+            session,
+            item.workout_id,
+            content_id=item.content_id,
+            note=item.note,
+            order=item.order or index,
+        )
+
+    session = await _load_full_session(session.id)
     return await _serialize_session(session)
 
 
@@ -169,67 +309,132 @@ async def list_sessions(
 ):
     target_user = await _resolve_target_user(current_user, user_id, "view")
 
-    sessions = await WorkoutSession.filter(user_id=target_user.id).prefetch_related(
-        "workout_logs__workout",
-        "workout_logs__set_logs",
-        "workout_logs__cardio_log",
-    ).offset(offset).limit(limit)
-
-    return [await _serialize_session(session) for session in sessions]
+    sessions = await WorkoutSession.filter(user_id=target_user.id).offset(offset).limit(limit)
+    loaded_sessions = [await _load_full_session(session.id) for session in sessions]
+    return [await _serialize_session(session) for session in loaded_sessions]
 
 
-@router.post("/workout-log", response_model=WorkoutLogOut, status_code=status.HTTP_201_CREATED)
-async def create_workout_log(payload: WorkoutLogCreate, current_user: User = Depends(login_required)):
-    session = await _get_accessible_session(payload.session_id, current_user, "manage")
+@router.get("/sessions/{session_id}", response_model=WorkoutSessionOut)
+async def get_session(session_id: int, current_user: User = Depends(login_required)):
+    await _get_accessible_session(session_id, current_user, "view")
+    session = await _load_full_session(session_id)
+    return await _serialize_session(session)
 
-    workout = await Workout.get_or_none(id=payload.workout_id)
-    if not workout:
-        raise HTTPException(status_code=404, detail="Workout not found")
 
-    workout_log = await WorkoutLog.create(
-        session=session,
-        workout=workout,
-        note=(payload.note or "").strip() or None,
+@router.post("/sessions/{session_id}/workouts", response_model=SessionWorkoutOut, status_code=status.HTTP_201_CREATED)
+async def add_session_workout(
+    session_id: int,
+    payload: SessionWorkoutCreate,
+    current_user: User = Depends(login_required),
+):
+    if payload.session_id != session_id:
+        raise HTTPException(status_code=400, detail="Session id mismatch")
+
+    session = await _get_accessible_session(session_id, current_user, "manage")
+    session_workout = await _create_session_workout(
+        session,
+        payload.workout_id,
+        content_id=payload.content_id,
+        note=payload.note,
+        order=payload.order,
     )
+    session = await _load_full_session(session.id)
+    created_item = next(item for item in session.workouts if item.id == session_workout.id)
+    return await _serialize_session_workout(created_item)
 
-    await workout_log.fetch_related("workout", "content", "set_logs")
-    return await _serialize_workout_log(workout_log)
+
+@router.post("/session-workouts/{session_workout_id}/complete", response_model=SessionWorkoutOut)
+async def complete_session_workout(
+    session_workout_id: int,
+    payload: SessionWorkoutComplete,
+    current_user: User = Depends(login_required),
+):
+    session_workout = await _get_accessible_session_workout(session_workout_id, current_user, "manage")
+    session_workout.note = (payload.note or session_workout.note or "").strip() or None
+    session_workout.is_completed = True
+    session_workout.completed_at = _utc_now()
+    await session_workout.save(update_fields=["note", "is_completed", "completed_at", "updated_at"])
+
+    if payload.mark_session_complete_if_finished:
+        await _mark_session_complete_if_needed(session_workout.session)
+
+    session = await _load_full_session(session_workout.session_id)
+    item = next(item for item in session.workouts if item.id == session_workout_id)
+    return await _serialize_session_workout(item)
+
+
+@router.post("/sessions/{session_id}/complete", response_model=WorkoutSessionOut)
+async def complete_session(
+    session_id: int,
+    payload: SessionComplete,
+    current_user: User = Depends(login_required),
+):
+    session = await _get_accessible_session(session_id, current_user, "manage")
+    if payload.duration_minutes is not None:
+        session.duration_minutes = payload.duration_minutes
+    if payload.note is not None:
+        session.note = payload.note.strip() or None
+    session.status = SessionStatus.COMPLETED
+    session.completed_at = _utc_now()
+    await session.save(update_fields=["duration_minutes", "note", "status", "completed_at", "updated_at"])
+
+    loaded_session = await _load_full_session(session.id)
+    return await _serialize_session(loaded_session)
 
 
 @router.post("/set-log", response_model=SetLogOut, status_code=status.HTTP_201_CREATED)
 async def create_set_log(payload: SetLogCreate, current_user: User = Depends(login_required)):
-    workout_log = await _get_accessible_workout_log(payload.workout_log_id, current_user, "manage")
+    session_workout = await _get_accessible_session_workout(payload.session_workout_id, current_user, "manage")
 
-    exists = await SetLog.filter(workout_log_id=payload.workout_log_id, order=payload.order).exists()
+    if session_workout.workout.workout_type == WorkoutType.CARDIO:
+        raise HTTPException(status_code=400, detail="Set logs are only allowed for non-cardio workouts")
+
+    exists = await SetLog.filter(session_workout_id=payload.session_workout_id, order=payload.order).exists()
     if exists:
-        raise HTTPException(status_code=400, detail="Set order already exists for this workout log")
+        raise HTTPException(status_code=400, detail="Set order already exists for this session workout")
 
     set_log = await SetLog.create(
-        workout_log=workout_log,
+        session_workout=session_workout,
         weight=payload.weight,
         reps=payload.reps,
         order=payload.order,
+        duration_seconds=payload.duration_seconds,
         is_completed=payload.is_completed,
     )
 
+    await _refresh_session_workout_calories(session_workout)
     return _serialize_set_log(set_log)
 
 
 @router.post("/cardio-log", response_model=CardioLogOut, status_code=status.HTTP_201_CREATED)
 async def create_cardio_log(payload: CardioLogCreate, current_user: User = Depends(login_required)):
-    workout_log = await _get_accessible_workout_log(payload.workout_log_id, current_user, "manage")
+    session_workout = await _get_accessible_session_workout(payload.session_workout_id, current_user, "manage")
 
-    if await CardioLog.filter(workout_log_id=payload.workout_log_id).exists():
-        raise HTTPException(status_code=400, detail="Cardio log already exists for this workout log")
+    if session_workout.workout.workout_type != WorkoutType.CARDIO:
+        raise HTTPException(status_code=400, detail="Cardio logs are only allowed for cardio workouts")
+
+    if await CardioLog.filter(session_workout_id=payload.session_workout_id).exists():
+        raise HTTPException(status_code=400, detail="Cardio log already exists for this session workout")
+
+    await session_workout.fetch_related("session", "workout")
+    weight_kg = _resolve_weight_kg(session_workout.session, payload.user_weight_kg)
+    calories_burned = _calculate_calories_burned(
+        session_workout.workout.met_value,
+        payload.time_minutes,
+        weight_kg,
+    )
 
     cardio_log = await CardioLog.create(
-        workout_log=workout_log,
+        session_workout=session_workout,
         time_minutes=payload.time_minutes,
         distance=payload.distance,
         speed=payload.speed,
         incline=payload.incline,
+        calories_burned=calories_burned,
+        user_weight_kg=weight_kg,
     )
 
+    await _refresh_session_workout_calories(session_workout)
     return _serialize_cardio_log(cardio_log)
 
 
@@ -240,11 +445,11 @@ async def progress_summary(
 ):
     target_user = await _resolve_target_user(current_user, user_id, "view")
 
-    total_workouts = await WorkoutLog.filter(session__user_id=target_user.id).count()
-    total_sets = await SetLog.filter(workout_log__session__user_id=target_user.id, is_completed=True).count()
+    total_workouts = await SessionWorkout.filter(session__user_id=target_user.id).count()
+    total_sets = await SetLog.filter(session_workout__session__user_id=target_user.id, is_completed=True).count()
 
     set_rows = await SetLog.filter(
-        workout_log__session__user_id=target_user.id,
+        session_workout__session__user_id=target_user.id,
         is_completed=True,
     ).values("weight", "reps")
     total_volume = round(sum(row["weight"] * row["reps"] for row in set_rows), 2)
@@ -254,11 +459,21 @@ async def progress_summary(
     ).values("avg_duration")
     avg_duration = round(float(avg_duration_row[0]["avg_duration"] or 0), 2) if avg_duration_row else 0.0
 
+    workout_rows = await SessionWorkout.filter(session__user_id=target_user.id).values(
+        "estimated_calories_burned",
+        "actual_calories_burned",
+    )
+    total_calories_burned = round(
+        sum((row["actual_calories_burned"] or row["estimated_calories_burned"] or 0) for row in workout_rows),
+        2,
+    )
+
     return ProgressSummaryOut(
         total_workouts=total_workouts,
         total_sets=total_sets,
         total_volume=total_volume,
         avg_duration=avg_duration,
+        total_calories_burned=total_calories_burned,
     )
 
 
@@ -270,13 +485,13 @@ async def progress_chart(
     target_user = await _resolve_target_user(current_user, user_id, "view")
 
     rows = await SetLog.filter(
-        workout_log__session__user_id=target_user.id,
+        session_workout__session__user_id=target_user.id,
         is_completed=True,
-    ).values("workout_log__session__date", "weight", "reps")
+    ).values("session_workout__session__date", "weight", "reps")
 
     volume_by_date: dict = defaultdict(float)
     for row in rows:
-        session_date = row["workout_log__session__date"]
+        session_date = row["session_workout__session__date"]
         volume_by_date[session_date] += row["weight"] * row["reps"]
 
     return [
@@ -294,30 +509,30 @@ async def progress_bests(
     target_user = await _resolve_target_user(current_user, user_id, "view")
 
     rows = await SetLog.filter(
-        workout_log__session__user_id=target_user.id,
+        session_workout__session__user_id=target_user.id,
         is_completed=True,
     ).prefetch_related(
-        "workout_log__workout__equipment",
-        "workout_log__session",
+        "session_workout__workout__equipment",
+        "session_workout__session",
     ).values(
         "weight",
         "reps",
-        "workout_log__workout__id",
-        "workout_log__workout__name",
-        "workout_log__workout__equipment__name",
-        "workout_log__session__date",
+        "session_workout__workout__id",
+        "session_workout__workout__name",
+        "session_workout__workout__equipment__name",
+        "session_workout__session__date",
     )
 
     bests_by_workout: dict[int, dict] = {}
 
     for row in rows:
-        workout_id = row["workout_log__workout__id"]
+        workout_id = row["session_workout__workout__id"]
         one_rm = _one_rm(row["weight"], row["reps"])
         current_entry = {
             "workout_id": workout_id,
-            "workout_name": row["workout_log__workout__name"],
-            "equipment_name": row["workout_log__workout__equipment__name"],
-            "date": row["workout_log__session__date"],
+            "workout_name": row["session_workout__workout__name"],
+            "equipment_name": row["session_workout__workout__equipment__name"],
+            "date": row["session_workout__session__date"],
             "best_1rm": one_rm,
         }
 
@@ -331,7 +546,7 @@ async def progress_bests(
 
         best = stored["best"]
         if one_rm > best["best_1rm"] or (
-            one_rm == best["best_1rm"] and row["workout_log__session__date"] > best["date"]
+            one_rm == best["best_1rm"] and row["session_workout__session__date"] > best["date"]
         ):
             stored["previous_best_1rm"] = best["best_1rm"]
             stored["best"] = current_entry

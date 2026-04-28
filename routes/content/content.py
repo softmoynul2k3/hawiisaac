@@ -4,7 +4,6 @@ from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.auth import get_user_or_none, login_required, permission_required
-from app.utils.datetime_formatter import to_utc_z
 from applications.content.models import (
     Content,
     ContentBookmark,
@@ -24,9 +23,15 @@ from applications.content.schema import (
 )
 from applications.equipments.models import Workout
 from applications.equipments.schema import serialize_workout
-from applications.session.models import WorkoutLog, WorkoutSession
+from applications.session.models import WorkoutSession
 from applications.session.schema import StartContentLogOut
 from applications.user.models import User
+from routes.sessions.routes import (
+    _create_session_workout,
+    _load_full_session,
+    _serialize_session,
+    _serialize_session_workout,
+)
 
 
 router = APIRouter(prefix="/contents", tags=["Content"])
@@ -237,30 +242,6 @@ async def update_content(content_id: int, payload: ContentUpdate):
     return serialize_content(await _attach_summary(content))
 
 
-def _serialize_started_workout_log(workout_log: WorkoutLog) -> dict:
-    return {
-        "id": workout_log.id,
-        "workout": {
-            "id": workout_log.workout.id,
-            "name": workout_log.workout.name,
-        },
-        "note": workout_log.note,
-        "set_logs": [],
-        "cardio_log": None,
-    }
-
-
-def _serialize_started_session(session: WorkoutSession, workout_log: WorkoutLog) -> dict:
-    return {
-        "id": session.id,
-        "user_id": session.user_id,
-        "date": session.date,
-        "duration_minutes": session.duration_minutes,
-        "created_at": to_utc_z(session.created_at) or "",
-        "workout_logs": [_serialize_started_workout_log(item) for item in session.workout_logs],
-    }
-
-
 @router.post("/{content_id}/start-log", response_model=StartContentLogOut, status_code=status.HTTP_201_CREATED)
 async def start_content_log(content_id: int, current_user: User = Depends(login_required)):
     content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
@@ -275,22 +256,20 @@ async def start_content_log(content_id: int, current_user: User = Depends(login_
         date=date.today(),
         duration_minutes=1,
     )
-    created_logs = []
-    for workout in linked_workouts:
-        workout_log = await WorkoutLog.create(
-            session=session,
-            workout=workout,
-            content=content,
+    for index, workout in enumerate(linked_workouts, start=1):
+        await _create_session_workout(
+            session,
+            workout.id,
+            content_id=content.id,
             note=f"Started from content: {content.title}",
+            order=index,
         )
-        created_logs.append(workout_log)
-
-    await session.fetch_related("workout_logs__workout", "workout_logs__content", "workout_logs__set_logs", "workout_logs__cardio_log")
-    first_workout_log = session.workout_logs[0]
+    session = await _load_full_session(session.id)
+    first_session_workout = session.workouts[0]
 
     return StartContentLogOut(
-        session=_serialize_started_session(session, first_workout_log),
-        first_workout_log=_serialize_started_workout_log(first_workout_log),
+        session=await _serialize_session(session),
+        first_session_workout=await _serialize_session_workout(first_session_workout),
     )
 
 
