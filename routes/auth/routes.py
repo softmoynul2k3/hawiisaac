@@ -199,8 +199,6 @@ async def signup(
     username = username.strip()
     password = password.strip()
 
-    await verify_otp(email, otp, 'signup')
-
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
     if not password:
@@ -210,6 +208,8 @@ async def signup(
         raise HTTPException(status_code=400, detail="Email already registered")
     if await User.get_or_none(username=username):
         raise HTTPException(status_code=400, detail="Username already taken")
+    
+    await verify_otp(email, otp, 'signup')
     
     gender = gender.strip() if gender else None
     dob = datetime.strptime(dob, "%Y-%m-%d").date() if dob else None
