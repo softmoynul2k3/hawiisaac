@@ -445,7 +445,7 @@ async def add_session_workout(
     return await _serialize_session_workout(created_item)
 
 
-# @router.post("/session-workouts/{session_workout_id}/complete", response_model=SessionWorkoutOut)
+@router.post("/session-workouts/{session_workout_id}/complete", response_model=SessionWorkoutOut)
 async def complete_session_workout(
     session_workout_id: int,
     payload: SessionWorkoutComplete,
