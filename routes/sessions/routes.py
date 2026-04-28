@@ -200,17 +200,19 @@ async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
     )
 
 
-async def _load_full_session(session_id: int) -> WorkoutSession:
+async def _load_full_session(session_id: int):
     session = await WorkoutSession.get(id=session_id).prefetch_related(
         "workouts__workout",
-        "workouts__content",
         "workouts__set_logs",
-        "workouts__cardio_log",
+        "workouts__cardio_log"
     )
-    session.workouts = sorted(list(session.workouts), key=lambda item: (item.order, item.id))
-    for item in session.workouts:
-        item.set_logs = sorted(list(item.set_logs), key=lambda set_log: (set_log.order, set_log.id))
-    return session
+
+    workouts = await session.workouts.all().order_by("order", "id")
+
+    return {
+        "session": session,
+        "workouts": workouts
+    }
 
 
 def _get_current_session_workout_from_loaded_session(session: WorkoutSession) -> SessionWorkout | None:

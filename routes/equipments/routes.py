@@ -97,7 +97,7 @@ async def _parse_muscle_group_ids(muscle_group_ids: Optional[str]) -> Optional[L
 async def create_workout(
     category_id: int = Form(...),
     equipment_id: Optional[int] = Form(None),
-    muscle_group_ids: Optional[str] = Form(None),
+    muscle_group_ids: Optional[List[int]] = Form(None),
     name: str = Form(...),
     description: Optional[str] = Form(None),
     workout_type: WorkoutType = Form(WorkoutType.NON_CARDIO),
@@ -259,7 +259,7 @@ async def update_workout(
 
     category_id: Optional[int] = Form(None),
     equipment_id: Optional[int] = Form(None),
-    muscle_group_ids: Optional[str] = Form(None),
+    muscle_group_ids: Optional[List[int]] = Form(None),
 
     name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
