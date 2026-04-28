@@ -121,7 +121,7 @@ class StartWorkoutLogOut(BaseModel):
 
 class ActiveSessionOut(BaseModel):
     session: WorkoutSessionOut
-    current_session_workout: Optional[SessionWorkoutOut] = None
+    # current_session_workout: Optional[SessionWorkoutOut] = None
 
 
 class ProgressSummaryOut(BaseModel):
