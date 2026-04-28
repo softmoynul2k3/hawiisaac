@@ -13,6 +13,7 @@ from applications.content.models import Content
 from applications.equipments.models import Workout, WorkoutType
 from applications.session.models import CardioLog, SessionStatus, SessionWorkout, SetLog, WorkoutSession
 from applications.session.schema import (
+    ActiveSessionOut,
     CardioLogCreate,
     CardioLogOut,
     ProgressBestOut,
@@ -190,6 +191,7 @@ async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
         note=session.note,
         user_weight_kg=session.user_weight_kg,
         status=session.status,
+        current_workout_order=session.current_workout_order,
         total_calories_burned=_session_total_calories(session),
         created_at=to_utc_z(session.created_at) or "",
         updated_at=to_utc_z(session.updated_at) or "",
@@ -209,6 +211,65 @@ async def _load_full_session(session_id: int) -> WorkoutSession:
     for item in session.workouts:
         item.set_logs = sorted(list(item.set_logs), key=lambda set_log: (set_log.order, set_log.id))
     return session
+
+
+def _get_current_session_workout_from_loaded_session(session: WorkoutSession) -> SessionWorkout | None:
+    for item in session.workouts:
+        if not item.is_completed:
+            return item
+    return session.workouts[0] if session.workouts else None
+
+
+async def _get_active_session_for_user(user_id) -> WorkoutSession | None:
+    session = await WorkoutSession.filter(user_id=user_id, status=SessionStatus.ACTIVE).order_by("-created_at").first()
+    if session is None:
+        return None
+    return await _load_full_session(session.id)
+
+
+async def _ensure_session_is_active(session: WorkoutSession):
+    if session.status != SessionStatus.ACTIVE:
+        raise HTTPException(status_code=400, detail="Session is already completed")
+
+
+async def _update_session_progress(session: WorkoutSession) -> WorkoutSession:
+    loaded_session = await _load_full_session(session.id)
+    current_item = _get_current_session_workout_from_loaded_session(loaded_session)
+    next_order = current_item.order if current_item else 1
+    updates = []
+    if loaded_session.current_workout_order != next_order:
+        loaded_session.current_workout_order = next_order
+        updates.append("current_workout_order")
+    if updates:
+        await loaded_session.save(update_fields=[*updates, "updated_at"])
+        loaded_session = await _load_full_session(loaded_session.id)
+    return loaded_session
+
+
+async def _create_or_reuse_active_session(current_user: User, *, date, duration_minutes: int = 1) -> tuple[WorkoutSession, bool]:
+    active_session = await _get_active_session_for_user(current_user.id)
+    if active_session is not None:
+        active_session = await _update_session_progress(active_session)
+        return active_session, False
+
+    session = await WorkoutSession.create(
+        user=current_user,
+        date=date,
+        duration_minutes=duration_minutes,
+        current_workout_order=1,
+    )
+    session = await _load_full_session(session.id)
+    return session, True
+
+
+async def _ensure_workout_has_logs(session_workout: SessionWorkout):
+    await session_workout.fetch_related("workout", "set_logs", "cardio_log")
+    if session_workout.workout.workout_type == WorkoutType.NON_CARDIO:
+        if not any(set_log.is_completed for set_log in session_workout.set_logs):
+            raise HTTPException(status_code=400, detail="Cannot complete workout without logs")
+        return
+    if await _resolve_cardio_log(session_workout) is None:
+        raise HTTPException(status_code=400, detail="Cannot complete workout without logs")
 
 
 async def _create_session_workout(
@@ -263,7 +324,7 @@ async def _refresh_session_workout_calories(session_workout: SessionWorkout) -> 
             minutes,
             weight_kg,
         ) if minutes else 0
-        session_workout.actual_calories_burned = 0
+        session_workout.actual_calories_burned = session_workout.estimated_calories_burned
 
     await session_workout.save(update_fields=["estimated_calories_burned", "actual_calories_burned", "updated_at"])
     return session_workout
@@ -273,18 +334,26 @@ async def _mark_session_complete_if_needed(session: WorkoutSession):
     remaining = await SessionWorkout.filter(session_id=session.id, is_completed=False).count()
     if remaining == 0:
         session.status = SessionStatus.COMPLETED
+        session.current_workout_order = 0
         session.completed_at = _utc_now()
-        await session.save(update_fields=["status", "completed_at", "updated_at"])
+        await session.save(update_fields=["status", "current_workout_order", "completed_at", "updated_at"])
+        return
+    await _update_session_progress(session)
 
 
 @router.post("/sessions", response_model=WorkoutSessionOut, status_code=status.HTTP_201_CREATED)
 async def create_session(payload: WorkoutSessionCreate, current_user: User = Depends(login_required)):
+    active_session = await _get_active_session_for_user(current_user.id)
+    if active_session is not None:
+        return await _serialize_session(active_session)
+
     session = await WorkoutSession.create(
         user=current_user,
         date=payload.date,
         duration_minutes=payload.duration_minutes,
         note=(payload.note or "").strip() or None,
         user_weight_kg=payload.user_weight_kg,
+        current_workout_order=1,
     )
 
     for index, item in enumerate(payload.workouts, start=1):
@@ -297,6 +366,7 @@ async def create_session(payload: WorkoutSessionCreate, current_user: User = Dep
         )
 
     session = await _load_full_session(session.id)
+    session = await _update_session_progress(session)
     return await _serialize_session(session)
 
 
@@ -312,6 +382,19 @@ async def list_sessions(
     sessions = await WorkoutSession.filter(user_id=target_user.id).offset(offset).limit(limit)
     loaded_sessions = [await _load_full_session(session.id) for session in sessions]
     return [await _serialize_session(session) for session in loaded_sessions]
+
+
+@router.get("/sessions/active", response_model=ActiveSessionOut)
+async def get_active_session(current_user: User = Depends(login_required)):
+    active_session = await _get_active_session_for_user(current_user.id)
+    if active_session is None:
+        raise HTTPException(status_code=404, detail="Active session not found")
+    active_session = await _update_session_progress(active_session)
+    current_item = _get_current_session_workout_from_loaded_session(active_session)
+    return ActiveSessionOut(
+        session=await _serialize_session(active_session),
+        current_session_workout=await _serialize_session_workout(current_item) if current_item else None,
+    )
 
 
 @router.get("/sessions/{session_id}", response_model=WorkoutSessionOut)
@@ -331,6 +414,7 @@ async def add_session_workout(
         raise HTTPException(status_code=400, detail="Session id mismatch")
 
     session = await _get_accessible_session(session_id, current_user, "manage")
+    await _ensure_session_is_active(session)
     session_workout = await _create_session_workout(
         session,
         payload.workout_id,
@@ -339,6 +423,7 @@ async def add_session_workout(
         order=payload.order,
     )
     session = await _load_full_session(session.id)
+    session = await _update_session_progress(session)
     created_item = next(item for item in session.workouts if item.id == session_workout.id)
     return await _serialize_session_workout(created_item)
 
@@ -350,6 +435,8 @@ async def complete_session_workout(
     current_user: User = Depends(login_required),
 ):
     session_workout = await _get_accessible_session_workout(session_workout_id, current_user, "manage")
+    await _ensure_session_is_active(session_workout.session)
+    await _ensure_workout_has_logs(session_workout)
     session_workout.note = (payload.note or session_workout.note or "").strip() or None
     session_workout.is_completed = True
     session_workout.completed_at = _utc_now()
@@ -370,13 +457,15 @@ async def complete_session(
     current_user: User = Depends(login_required),
 ):
     session = await _get_accessible_session(session_id, current_user, "manage")
+    await _ensure_session_is_active(session)
     if payload.duration_minutes is not None:
         session.duration_minutes = payload.duration_minutes
     if payload.note is not None:
         session.note = payload.note.strip() or None
     session.status = SessionStatus.COMPLETED
+    session.current_workout_order = 0
     session.completed_at = _utc_now()
-    await session.save(update_fields=["duration_minutes", "note", "status", "completed_at", "updated_at"])
+    await session.save(update_fields=["duration_minutes", "note", "status", "current_workout_order", "completed_at", "updated_at"])
 
     loaded_session = await _load_full_session(session.id)
     return await _serialize_session(loaded_session)
@@ -385,36 +474,40 @@ async def complete_session(
 @router.post("/set-log", response_model=SetLogOut, status_code=status.HTTP_201_CREATED)
 async def create_set_log(payload: SetLogCreate, current_user: User = Depends(login_required)):
     session_workout = await _get_accessible_session_workout(payload.session_workout_id, current_user, "manage")
+    await _ensure_session_is_active(session_workout.session)
 
     if session_workout.workout.workout_type == WorkoutType.CARDIO:
         raise HTTPException(status_code=400, detail="Set logs are only allowed for non-cardio workouts")
 
-    exists = await SetLog.filter(session_workout_id=payload.session_workout_id, order=payload.order).exists()
-    if exists:
-        raise HTTPException(status_code=400, detail="Set order already exists for this session workout")
-
-    set_log = await SetLog.create(
-        session_workout=session_workout,
-        weight=payload.weight,
-        reps=payload.reps,
-        order=payload.order,
-        duration_seconds=payload.duration_seconds,
-        is_completed=payload.is_completed,
-    )
+    set_log = await SetLog.get_or_none(session_workout_id=payload.session_workout_id, order=payload.order)
+    if set_log is None:
+        set_log = await SetLog.create(
+            session_workout=session_workout,
+            weight=payload.weight,
+            reps=payload.reps,
+            order=payload.order,
+            duration_seconds=payload.duration_seconds,
+            is_completed=payload.is_completed,
+        )
+    else:
+        set_log.weight = payload.weight
+        set_log.reps = payload.reps
+        set_log.duration_seconds = payload.duration_seconds
+        set_log.is_completed = payload.is_completed
+        await set_log.save(update_fields=["weight", "reps", "duration_seconds", "is_completed", "updated_at"])
 
     await _refresh_session_workout_calories(session_workout)
+    await _update_session_progress(session_workout.session)
     return _serialize_set_log(set_log)
 
 
 @router.post("/cardio-log", response_model=CardioLogOut, status_code=status.HTTP_201_CREATED)
 async def create_cardio_log(payload: CardioLogCreate, current_user: User = Depends(login_required)):
     session_workout = await _get_accessible_session_workout(payload.session_workout_id, current_user, "manage")
+    await _ensure_session_is_active(session_workout.session)
 
     if session_workout.workout.workout_type != WorkoutType.CARDIO:
         raise HTTPException(status_code=400, detail="Cardio logs are only allowed for cardio workouts")
-
-    if await CardioLog.filter(session_workout_id=payload.session_workout_id).exists():
-        raise HTTPException(status_code=400, detail="Cardio log already exists for this session workout")
 
     await session_workout.fetch_related("session", "workout")
     weight_kg = _resolve_weight_kg(session_workout.session, payload.user_weight_kg)
@@ -424,17 +517,28 @@ async def create_cardio_log(payload: CardioLogCreate, current_user: User = Depen
         weight_kg,
     )
 
-    cardio_log = await CardioLog.create(
-        session_workout=session_workout,
-        time_minutes=payload.time_minutes,
-        distance=payload.distance,
-        speed=payload.speed,
-        incline=payload.incline,
-        calories_burned=calories_burned,
-        user_weight_kg=weight_kg,
-    )
+    cardio_log = await CardioLog.get_or_none(session_workout_id=payload.session_workout_id)
+    if cardio_log is None:
+        cardio_log = await CardioLog.create(
+            session_workout=session_workout,
+            time_minutes=payload.time_minutes,
+            distance=payload.distance,
+            speed=payload.speed,
+            incline=payload.incline,
+            calories_burned=calories_burned,
+            user_weight_kg=weight_kg,
+        )
+    else:
+        cardio_log.time_minutes = payload.time_minutes
+        cardio_log.distance = payload.distance
+        cardio_log.speed = payload.speed
+        cardio_log.incline = payload.incline
+        cardio_log.calories_burned = calories_burned
+        cardio_log.user_weight_kg = weight_kg
+        await cardio_log.save(update_fields=["time_minutes", "distance", "speed", "incline", "calories_burned", "user_weight_kg", "updated_at"])
 
     await _refresh_session_workout_calories(session_workout)
+    await _update_session_progress(session_workout.session)
     return _serialize_cardio_log(cardio_log)
 
 

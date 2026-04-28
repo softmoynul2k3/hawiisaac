@@ -16,6 +16,7 @@ class WorkoutSession(models.Model):
     note = fields.TextField(null=True)
     user_weight_kg = fields.FloatField(null=True)
     status = fields.CharEnumField(SessionStatus, default=SessionStatus.ACTIVE, max_length=20)
+    current_workout_order = fields.IntField(default=1)
     completed_at = fields.DatetimeField(null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)

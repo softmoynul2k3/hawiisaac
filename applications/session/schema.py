@@ -101,6 +101,7 @@ class WorkoutSessionOut(BaseModel):
     note: Optional[str] = None
     user_weight_kg: Optional[float] = None
     status: SessionStatus
+    current_workout_order: int
     total_calories_burned: float
     created_at: str
     updated_at: str
@@ -116,6 +117,11 @@ class StartContentLogOut(BaseModel):
 class StartWorkoutLogOut(BaseModel):
     session: WorkoutSessionOut
     first_session_workout: SessionWorkoutOut
+
+
+class ActiveSessionOut(BaseModel):
+    session: WorkoutSessionOut
+    current_session_workout: Optional[SessionWorkoutOut] = None
 
 
 class ProgressSummaryOut(BaseModel):

@@ -15,11 +15,12 @@ from applications.content.models import (
 )
 from applications.content.schema import (
     ContentCreate,
-    ContentListWithWorkoutsOut,
+    ContentListItemOut,
     ContentOut,
     ContentUpdate,
     normalize_content_text,
     serialize_content,
+    serialize_content_list_item,
 )
 from applications.equipments.models import Workout
 from applications.equipments.schema import serialize_workout
@@ -27,7 +28,9 @@ from applications.session.models import WorkoutSession
 from applications.session.schema import StartContentLogOut
 from applications.user.models import User
 from routes.sessions.routes import (
+    _create_or_reuse_active_session,
     _create_session_workout,
+    _get_current_session_workout_from_loaded_session,
     _load_full_session,
     _serialize_session,
     _serialize_session_workout,
@@ -132,7 +135,7 @@ async def create_content(payload: ContentCreate):
     return serialize_content(content)
 
 
-@router.get("/", response_model=ContentListWithWorkoutsOut)
+@router.get("/", response_model=List[ContentListItemOut])
 async def list_contents(
     search: Optional[str] = Query(None),
     is_active: Optional[bool] = Query(None),
@@ -141,7 +144,7 @@ async def list_contents(
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
     current_user: Optional[User] = Depends(get_user_or_none),
-):
+) -> ContentListItemOut:
     feed_filter = _parse_feed_filter(feed)
     type_filter = _parse_type_filter(type)
     queryset = Content.all()
@@ -178,16 +181,12 @@ async def list_contents(
             reverse=True,
         )
         paginated_contents = ranked_contents[offset:offset + limit]
-        return ContentListWithWorkoutsOut(
-            contents=[serialize_content(content) for content in paginated_contents],
-            workouts=[await serialize_workout(workout) for workout in workouts],
-        )
+        content_items: List[ContentListItemOut] = [serialize_content_list_item(content) for content in paginated_contents]
+        return content_items
 
     contents = await queryset.offset(offset).limit(limit)
-    return ContentListWithWorkoutsOut(
-        contents=[serialize_content(await _attach_summary(content)) for content in contents],
-        workouts=[await serialize_workout(workout) for workout in workouts],
-    )
+    content_items: List[ContentListItemOut] = [serialize_content_list_item(await _attach_summary(content)) for content in contents]
+    return content_items
 
 
 @router.get("/{content_id}", response_model=ContentOut)
@@ -251,11 +250,17 @@ async def start_content_log(content_id: int, current_user: User = Depends(login_
     if not linked_workouts:
         raise HTTPException(status_code=400, detail="This content is not linked to any workouts")
 
-    session = await WorkoutSession.create(
-        user=current_user,
+    session, created = await _create_or_reuse_active_session(
+        current_user,
         date=date.today(),
         duration_minutes=1,
     )
+    if not created:
+        first_session_workout = _get_current_session_workout_from_loaded_session(session)
+        return StartContentLogOut(
+            session=await _serialize_session(session),
+            first_session_workout=await _serialize_session_workout(first_session_workout) if first_session_workout else None,
+        )
     for index, workout in enumerate(linked_workouts, start=1):
         await _create_session_workout(
             session,
