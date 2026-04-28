@@ -156,33 +156,51 @@ def _serialize_workout_reference(workout: Workout) -> dict:
     }
 
 
+async def _resolve_session_workout_content(session_workout: SessionWorkout):
+    content = getattr(session_workout, "content", None)
+    if isinstance(content, QuerySet):
+        content = await content.first()
+    return content
+
+
 async def _serialize_session_workout(session_workout: SessionWorkout) -> SessionWorkoutOut:
-    cardio_log = await _resolve_cardio_log(session_workout)
+    workout = await Workout.get_or_none(id=session_workout.workout_id)
+    if workout is None:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    content = None
+    if session_workout.content_id is not None:
+        content = await Content.get_or_none(id=session_workout.content_id)
+
+    set_logs = await SetLog.filter(session_workout_id=session_workout.id).order_by("order", "id")
+    cardio_log = await CardioLog.get_or_none(session_workout_id=session_workout.id)
+
     return SessionWorkoutOut(
         id=session_workout.id,
         order=session_workout.order,
-        workout=_serialize_workout_reference(session_workout.workout),
+        workout=_serialize_workout_reference(workout),
         content={
-            "id": session_workout.content.id,
-            "title": session_workout.content.title,
-        } if session_workout.content else None,
+            "id": content.id,
+            "title": content.title,
+        } if content else None,
         note=session_workout.note,
         is_completed=session_workout.is_completed,
         estimated_calories_burned=round(session_workout.estimated_calories_burned, 2),
         actual_calories_burned=round(session_workout.actual_calories_burned, 2),
-        set_logs=[_serialize_set_log(set_log) for set_log in session_workout.set_logs],
+        set_logs=[_serialize_set_log(set_log) for set_log in set_logs],
         cardio_log=_serialize_cardio_log(cardio_log),
     )
 
 
-def _session_total_calories(session: WorkoutSession) -> float:
+def _session_total_calories(workouts: List[SessionWorkout]) -> float:
     return round(
-        sum((workout.actual_calories_burned or workout.estimated_calories_burned or 0) for workout in session.workouts),
+        sum((workout.actual_calories_burned or workout.estimated_calories_burned or 0) for workout in workouts),
         2,
     )
 
 
 async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
+    workouts = await SessionWorkout.filter(session_id=session.id).order_by("order", "id")
     return WorkoutSessionOut(
         id=session.id,
         user_id=session.user_id,
@@ -192,27 +210,21 @@ async def _serialize_session(session: WorkoutSession) -> WorkoutSessionOut:
         user_weight_kg=session.user_weight_kg,
         status=session.status,
         current_workout_order=session.current_workout_order,
-        total_calories_burned=_session_total_calories(session),
+        total_calories_burned=_session_total_calories(workouts),
         created_at=to_utc_z(session.created_at) or "",
         updated_at=to_utc_z(session.updated_at) or "",
         completed_at=to_utc_z(session.completed_at),
-        workouts=[await _serialize_session_workout(session_workout) for session_workout in session.workouts],
+        workouts=[await _serialize_session_workout(session_workout) for session_workout in workouts],
     )
 
 
-async def _load_full_session(session_id: int):
-    session = await WorkoutSession.get(id=session_id).prefetch_related(
+async def _load_full_session(session_id: int) -> WorkoutSession:
+    return await WorkoutSession.get(id=session_id).prefetch_related(
         "workouts__workout",
+        "workouts__content",
         "workouts__set_logs",
-        "workouts__cardio_log"
+        "workouts__cardio_log",
     )
-
-    workouts = await session.workouts.all().order_by("order", "id")
-
-    return {
-        "session": session,
-        "workouts": workouts
-    }
 
 
 def _get_current_session_workout_from_loaded_session(session: WorkoutSession) -> SessionWorkout | None:
@@ -384,7 +396,7 @@ async def list_sessions(
     sessions = await WorkoutSession.filter(user_id=target_user.id).offset(offset).limit(limit)
     loaded_sessions = [await _load_full_session(session.id) for session in sessions]
     return [
-        await _serialize_session(item["session"])
+        await _serialize_session(item)
         for item in loaded_sessions
     ]
 
