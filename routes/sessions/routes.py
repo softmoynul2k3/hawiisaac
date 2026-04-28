@@ -383,7 +383,10 @@ async def list_sessions(
 
     sessions = await WorkoutSession.filter(user_id=target_user.id).offset(offset).limit(limit)
     loaded_sessions = [await _load_full_session(session.id) for session in sessions]
-    return [await _serialize_session(session) for session in loaded_sessions]
+    return [
+        await _serialize_session(item["session"])
+        for item in loaded_sessions
+    ]
 
 
 @router.get("/sessions/active", response_model=ActiveSessionOut)
