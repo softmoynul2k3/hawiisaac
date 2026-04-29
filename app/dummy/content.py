@@ -1,4 +1,5 @@
 from tortoise.transactions import in_transaction
+from app.config import settings
 
 from applications.content.models import (
     Content,
@@ -10,6 +11,8 @@ from applications.content.models import (
 from applications.equipments.models import Workout, WorkoutType
 from applications.user.models import User
 
+
+BASE_URL = settings.BASE_URL
 
 CONTENT_DATA = [
     {
@@ -31,8 +34,8 @@ CONTENT_DATA = [
             "Start with full-body sessions two or three times each week. Focus on a few repeatable movements, "
             "track your loads, and give yourself enough recovery time to improve steadily."
         ),
-        "image": "https://images.pexels.com/photos/1552242/pexels-photo-1552242.jpeg?auto=compress&cs=tinysrgb&w=1200",
-        "video": "https://videos.pexels.com/video-files/4761426/4761426-hd_1920_1080_25fps.mp4",
+        "image": f"{BASE_URL}/assets/banner1.png",
+        "video": f"{BASE_URL}/assets/banner1.mp4",
         "is_active": True,
     },
     {
@@ -50,8 +53,8 @@ CONTENT_DATA = [
             "This sequence mixes breathing, thoracic rotation, hip openers, and gentle hamstring work. "
             "It is designed for consistency more than intensity."
         ),
-        "image": "https://images.pexels.com/photos/4325464/pexels-photo-4325464.jpeg?auto=compress&cs=tinysrgb&w=1200",
-        "video": "https://videos.pexels.com/video-files/4057709/4057709-hd_1920_1080_25fps.mp4",
+        "image": f"{BASE_URL}/assets/banner2.jpg",
+        "video": f"{BASE_URL}/assets/banner2.mp4",
         "is_active": True,
     },
     {
@@ -71,8 +74,8 @@ CONTENT_DATA = [
             "Zone 2 training helps build aerobic capacity and recovery without draining the nervous system. "
             "Use conversational effort and keep the sessions long enough to be meaningful."
         ),
-        "image": "https://images.pexels.com/photos/3768916/pexels-photo-3768916.jpeg?auto=compress&cs=tinysrgb&w=1200",
-        "video": "https://videos.pexels.com/video-files/2795748/2795748-hd_1920_1080_25fps.mp4",
+        "image": f"{BASE_URL}/assets/banner3.jpg",
+        "video": f"{BASE_URL}/assets/banner3.mp4",
         "is_active": True,
     },
     {
@@ -90,8 +93,8 @@ CONTENT_DATA = [
             "HIIT sessions alternate between short bursts of near-maximal effort and brief recovery periods. "
             "Keep total work volume moderate and prioritise form to reduce injury risk."
         ),
-        "image": "https://images.pexels.com/photos/6389513/pexels-photo-6389513.jpeg?auto=compress&cs=tinysrgb&w=1200",
-        "video": "https://www.pexels.com/video/a-person-using-a-treadmill-6892539/",
+        "image": f"{BASE_URL}/assets/banner4.png",
+        "video": f"{BASE_URL}/assets/banner4.mp4",
         "is_active": True,
     },
     {
@@ -110,8 +113,8 @@ CONTENT_DATA = [
             "Alternate between a strength movement and a cardio burst with minimal rest between pairs. "
             "This approach builds work capacity and muscular endurance simultaneously."
         ),
-        "image": "https://images.pexels.com/photos/6796964/pexels-photo-6796964.jpeg?auto=compress&cs=tinysrgb&w=1200",
-        "video": "https://www.pexels.com/video/dumbbell-weights-20621391/",
+        "image": f"{BASE_URL}/assets/banner1.png",
+        "video": f"{BASE_URL}/assets/banner1.mp4",
         "is_active": True,
     },
 ]
