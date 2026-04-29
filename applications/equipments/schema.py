@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Dict, Any
 
 from applications.equipments.models import Category, Equipment, MuscleGroups, Workout
-
+from datetime import timedelta, time
 
 # ---------------- CATEGORY ----------------
 async def serialize_category(category: Category) -> Dict[str, Any]:
@@ -40,6 +41,23 @@ async def serialize_muscle_group(muscle_group: MuscleGroups) -> Dict[str, Any]:
     }
 
 
+def timedelta_to_str(value) -> str | None:
+    """Convert timedelta or time to HH:MM:SS string."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+    if isinstance(value, time):
+        return value.isoformat()
+
+    return str(value)
+
 # ---------------- EQUIPMENT ----------------
 async def serialize_workout(equipment: Workout) -> Dict[str, Any]:
     await equipment.fetch_related("category", "equipment", "muscle_groups")
@@ -70,6 +88,14 @@ async def serialize_workout(equipment: Workout) -> Dict[str, Any]:
         "sets": equipment.sets,
         "reps": equipment.reps,
         "rest": equipment.rest,
+
+        # ---------------- CARDIO METRICS (NEW) ----------------
+        "time": timedelta_to_str(equipment.time),
+        "duration": timedelta_to_str(equipment.duration),
+        "distance": equipment.distance,
+        "speed": equipment.speed,
+        "incline": equipment.incline,
+        
         "uses": equipment.uses,
         "banner": equipment.banner,
         "video": equipment.video,
