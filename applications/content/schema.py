@@ -1,7 +1,8 @@
+from datetime import datetime
 from typing import Optional
 
 from pydantic import BaseModel
-
+from datetime import timedelta, time
 from app.utils.datetime_formatter import to_utc_z
 from applications.content.models import Content, ContentFeedType, ContentType
 
@@ -92,6 +93,23 @@ def normalize_content_text(value: Optional[str], *, required: bool = False, fiel
     return cleaned or None
 
 
+def timedelta_to_str(value) -> str | None:
+    """Convert timedelta or time to HH:MM:SS string."""
+
+    if value is None:
+        return None
+
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        return f"{hours:02}:{minutes:02}:{seconds:02}"
+
+    if isinstance(value, time):
+        return value.isoformat()
+
+    return str(value)
+
 def serialize_content(content: Content) -> ContentOut:
     workouts = sorted(list(getattr(content, "workouts", []) or []), key=lambda item: item.id)
     return ContentOut(
@@ -105,9 +123,11 @@ def serialize_content(content: Content) -> ContentOut:
                 "name": workout.name,
                 "workout_type": workout.workout_type,
                 "met_value": workout.met_value,
-                "sets": workout.sets,
-                "reps": workout.reps,
-                "rest": workout.rest,
+                "time": timedelta_to_str(workout.time),
+                "duration": timedelta_to_str(workout.duration),
+                "distance": workout.distance,
+                "speed": workout.speed,
+                "incline": workout.incline,
             }
             for workout in workouts
         ],

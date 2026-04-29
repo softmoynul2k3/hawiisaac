@@ -159,6 +159,7 @@ async def list_workout(
     category_id: Optional[int] = Query(None),
     equipment_id: Optional[int] = Query(None),
     muscle_group_id: Optional[int] = Query(None),
+    workout_type: Optional[WorkoutType] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -181,6 +182,9 @@ async def list_workout(
 
     if muscle_group_id:
         queryset = queryset.filter(muscle_groups__id=muscle_group_id)
+
+    if workout_type:
+        queryset = queryset.filter(workout_type=workout_type.value)
 
     workouts = await queryset.distinct().offset(offset).limit(limit)
 

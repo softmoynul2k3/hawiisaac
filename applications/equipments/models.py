@@ -61,6 +61,14 @@ class Workout(models.Model):
     sets = fields.CharField(max_length=100)
     reps = fields.CharField(max_length=100)
     rest = fields.CharField(max_length=100)
+
+    time = fields.TimeField(null=True, blank=True)
+    distance = fields.IntField(null=True, blank=True)
+    speed  = fields.IntField(null=True, blank=True)
+    incline  = fields.IntField(null=True, blank=True)
+
+    duration = fields.TimeField(null=True, blank=True)
+
     uses = fields.JSONField(null=True, blank=True)
 
     banner = fields.CharField(max_length=255, blank=True, null=True)
