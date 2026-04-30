@@ -5,7 +5,7 @@ networks:
 services:
   api:
     image: ${IMAGE_NAMESPACE:-moynul2k3}/hykx-backend:${IMAGE_TAG:-latest}
-    container_name: rapplo_api
+    container_name: hykx_api
     ports:
       - "8000:8000"
     env_file:
