@@ -145,3 +145,18 @@ class ProgressBestOut(BaseModel):
     best_1rm: float
     previous_best_1rm: float
     improvement: float
+
+
+class ProgressHighlightsOut(BaseModel):
+    days_streak: int
+    workouts_this_week: int
+    calories_burned: float
+
+
+class RecentActivityItemOut(BaseModel):
+    session_id: int
+    title: str
+    date: date
+    day_label: str
+    duration_minutes: int
+    set_count: int

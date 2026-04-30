@@ -2,7 +2,7 @@ from datetime import date
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from tortoise.transactions import in_transaction
 
 from app.auth import login_required
@@ -52,11 +52,15 @@ async def _allowed(current_user: User, target_user: Optional[User], action: str)
 
 
 @router.get("/users")
-async def get_all_users(current_user: User = Depends(login_required)):
+async def get_all_users(
+    offset: int = Query(0, ge=0),
+    limit: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(login_required),
+):
     if not await _allowed(current_user, None, "list"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied.")
 
-    users = await User.all().order_by("-created_at").prefetch_related(
+    users = await User.all().order_by("-created_at").offset(offset).limit(limit).prefetch_related(
         "groups",
         "groups__permissions",
         "user_permissions",
