@@ -32,10 +32,20 @@ jobs:
           username: ${{ env.DOCKERHUB_USERNAME }}
           password: ${{ env.DOCKERHUB_TOKEN }}
 
+      - name: Show build inputs
+        run: |
+          echo "Dockerfile used by CI:"
+          nl -ba Dockerfile
+          echo
+          echo "requirements.txt used by CI:"
+          sed -n '1,140p' requirements.txt
+
       - name: Build and Push Docker image
         uses: docker/build-push-action@v5
         with:
           context: .
+          pull: true
+          no-cache: true
           push: true
           tags: |
             ${{ env.DOCKERHUB_USERNAME }}/hykx-backend:latest
