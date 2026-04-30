@@ -35,7 +35,7 @@ async def _allowed(current_user: User, target_user: Optional[User], action: str)
 
     if action == "delete":
         if is_self:
-            return False
+            return True
         return (
             current_user.is_superuser
             or await current_user.has_permission("delete_user")
@@ -93,6 +93,7 @@ async def update_user(
     email: Optional[str] = Form(None),
     first_name: Optional[str] = Form(None),
     last_name: Optional[str] = Form(None),
+    bio: Optional[str] = Form(None),
     gender: Optional[str] = Form(None),
     dob: Optional[date] = Form(None),
     is_active: Optional[bool] = Form(None),
@@ -170,6 +171,10 @@ async def update_user(
         if last_name is not None:
             cleaned_last_name = last_name.strip()
             user.last_name = cleaned_last_name or None
+
+        if bio is not None:
+            cleaned_bio = bio.strip()
+            user.bio = cleaned_bio or None
 
         if gender is not None:
             cleaned_gender = gender.strip()
@@ -261,9 +266,6 @@ async def delete_user(user_id: UUID, current_user: User = Depends(login_required
     user = await User.get_or_none(id=user_id)
     if not user:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
-
-    if user.id == current_user.id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="You cannot delete your own account.")
 
     if not await _allowed(current_user, user, "delete"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Permission denied.")
