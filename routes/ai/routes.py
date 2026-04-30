@@ -20,6 +20,7 @@ from applications.ai.schema import (
     EquipmentScanResponse,
     EquipmentVerifyRequest,
     EquipmentVerifyResponse,
+    RecommendedWorkout,
 )
 from applications.user.models import User
 
