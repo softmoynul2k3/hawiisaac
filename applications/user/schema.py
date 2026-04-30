@@ -40,6 +40,7 @@ async def serialize_user(user: User) -> Dict[str, Any]:
         # -------- PROFILE INFO --------
         "first_name": user.first_name,
         "last_name": user.last_name,
+        "bio": user.bio,
         "gender": user.gender,
         "photo": user.photo,
         "dob": user.dob.isoformat() if user.dob else None,

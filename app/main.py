@@ -1,6 +1,7 @@
 import os
 import importlib
 from contextlib import asynccontextmanager
+from pathlib import Path
 from app.task_config import start
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -70,7 +71,12 @@ async def home(request: Request):
         }
     )
 
-
+BASE_DIR = Path(__file__).resolve().parent.parent
+app.mount(
+    "/assets",
+    StaticFiles(directory=BASE_DIR / "templates" / "assets"),
+    name="assets"
+)
 ALLOWED_HOST = ["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:5173", "https://ocreels.netlify.app"]
 app.add_middleware(
     CORSMiddleware,
