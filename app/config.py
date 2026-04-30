@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     GOOGLE_CLIENT_IDS: str = ""
     APPLE_CLIENT_IDS: str = ""
     BASE_URL: str = "http://localhost:8000/"
-    RADIS_URL: str = "redis://localhost:6379/0"
+    REDIS_URL: str = "redis://localhost:6379/0"
     GEMINI_API_KEY: Optional[str] = None
     OPENAI_API_KEY: Optional[str] = None
     AI_PROVIDER: str = "gemini"  # "gemini" or "openai"
@@ -63,9 +63,6 @@ TORTOISE_ORM = {
     "use_tz": True,
     "timezone": "Asia/Dhaka",
 }
-import json
-print(json.dumps(TORTOISE_ORM, indent=4))
-
 async def init_db():
     await Tortoise.init(config=TORTOISE_ORM)
     if settings.DEBUG:
