@@ -121,7 +121,7 @@ python-multipart==0.0.20
 python-slugify==8.0.4
 python-socketio==5.16.1
 pytz==2025.2
-pywin32==311
+pywin32==311; sys_platform == "win32"
 PyYAML==6.0.2
 pyzmq==27.1.0
 qrcode==8.2
