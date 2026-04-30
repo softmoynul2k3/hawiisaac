@@ -36,6 +36,7 @@ class User(models.Model):
     password = fields.CharField(max_length=2000, default="")
     first_name = fields.CharField(max_length=100, null=True)
     last_name = fields.CharField(max_length=100, null=True)
+    bio = fields.TextField(null=True)
     gender = fields.CharField(max_length=20, null=True)
     dob = fields.DateField(null=True)
     photo = fields.CharField(max_length=400, null=True)

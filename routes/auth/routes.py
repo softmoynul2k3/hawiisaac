@@ -189,6 +189,7 @@ async def signup(
     username: str = Form(...),
     email: str = Form(...),
     password: str = Form(...),
+    bio: Optional[str] = Form(None),
     gender: Optional[str] = Form(None),
     dob: Optional[str] = Form(None, description="Date of birth in YYYY-MM-DD format (e.g., 2000-05-21)"),
     otp: str = Form(...),
@@ -211,6 +212,7 @@ async def signup(
     
     await verify_otp(email, otp, 'signup')
     
+    bio = bio.strip() if bio else None
     gender = gender.strip() if gender else None
     dob = datetime.strptime(dob, "%Y-%m-%d").date() if dob else None
 
@@ -218,6 +220,7 @@ async def signup(
         username=username,
         email=email,
         password=User.set_password(password),
+        bio=bio,
         gender=gender, 
         dob=dob,       
     )
@@ -359,6 +362,7 @@ async def verify_token(request: Request, user: User = Depends(get_current_user))
         "email": user.email,
         "first_name": user.first_name,
         "last_name": user.last_name,
+        "bio": user.bio,
         "auth_provider": user.auth_provider,
         "is_active": user.is_active,
         "is_superuser": user.is_superuser,
