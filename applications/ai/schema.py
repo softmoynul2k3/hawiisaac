@@ -52,3 +52,14 @@ class EquipmentInfoResponse(BaseModel):
     success: bool
     equipment: Optional[EquipmentInfo] = None
     error_message: Optional[str] = None
+
+
+class EquipmentVerifyRequest(BaseModel):
+    equipment_name: str = Field(..., description="Name of the equipment to verify")
+
+
+class EquipmentVerifyResponse(BaseModel):
+    success: bool
+    is_match: bool
+    message: str
+    confidence: Optional[float] = None
