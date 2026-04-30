@@ -1,14 +1,27 @@
+from datetime import date
 from typing import List, Optional
 import json
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, status
 from tortoise.expressions import Q
 
-from app.auth import permission_required
+from app.auth import login_required, permission_required
 from app.utils.file_manager import save_file, update_file, delete_file
 
-from applications.equipments.models import Workout, Category, Equipment, MuscleGroups
+from applications.content.models import Content
+from applications.equipments.models import Workout, Category, Equipment, MuscleGroups, WorkoutType
 from applications.equipments.schema import serialize_workout
+from applications.session.models import WorkoutSession
+from applications.session.schema import StartWorkoutLogOut
+from applications.user.models import User
+from routes.sessions.routes import (
+    _create_or_reuse_active_session,
+    _create_session_workout,
+    _get_current_session_workout_from_loaded_session,
+    _load_full_session,
+    _serialize_session,
+    _serialize_session_workout,
+)
 
 
 router = APIRouter(prefix="/workout", tags=["Workout"])
@@ -84,9 +97,11 @@ async def _parse_muscle_group_ids(muscle_group_ids: Optional[str]) -> Optional[L
 async def create_workout(
     category_id: int = Form(...),
     equipment_id: Optional[int] = Form(None),
-    muscle_group_ids: Optional[str] = Form(None),
+    muscle_group_ids: Optional[List[int]] = Form(None),
     name: str = Form(...),
     description: Optional[str] = Form(None),
+    workout_type: WorkoutType = Form(WorkoutType.NON_CARDIO),
+    met_value: Optional[float] = Form(None),
 
     sets: str = Form(...),
     reps: str = Form(...),
@@ -118,6 +133,8 @@ async def create_workout(
         name=name,
         description=_normalize_optional_text(description),
         tags=_normalize_optional_text(tags),
+        workout_type=workout_type,
+        met_value=met_value if met_value is not None else (8.0 if workout_type == WorkoutType.CARDIO else 5.0),
         sets=_normalize_required_text(sets, "Sets"),
         reps=_normalize_required_text(reps, "Reps"),
         rest=_normalize_required_text(rest, "Rest"),
@@ -142,6 +159,7 @@ async def list_workout(
     category_id: Optional[int] = Query(None),
     equipment_id: Optional[int] = Query(None),
     muscle_group_id: Optional[int] = Query(None),
+    workout_type: Optional[WorkoutType] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -165,6 +183,9 @@ async def list_workout(
     if muscle_group_id:
         queryset = queryset.filter(muscle_groups__id=muscle_group_id)
 
+    if workout_type:
+        queryset = queryset.filter(workout_type=workout_type.value)
+
     workouts = await queryset.distinct().offset(offset).limit(limit)
 
     return [await serialize_workout(workout) for workout in workouts]
@@ -184,6 +205,52 @@ async def get_workout(workout_id: int):
     return await serialize_workout(workout)
 
 
+@router.post("/{workout_id}/start-log", response_model=StartWorkoutLogOut, status_code=status.HTTP_201_CREATED)
+async def start_workout_log(
+    workout_id: int,
+    # content_id: Optional[int] = Query(None),
+    current_user: User = Depends(login_required),
+):
+    workout = await Workout.get_or_none(id=workout_id).prefetch_related("equipment", "category", "muscle_groups")
+    if not workout:
+        raise HTTPException(status_code=404, detail="Workout not found")
+
+    # content = None
+    # if content_id is not None:
+    #     content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
+    #     if not content:
+    #         raise HTTPException(status_code=404, detail="Content not found")
+    #     linked_workout_ids = {item.id for item in content.workouts}
+    #     if linked_workout_ids and workout.id not in linked_workout_ids:
+    #         raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
+
+    session, created = await _create_or_reuse_active_session(
+        current_user,
+        date=date.today(),
+        duration_minutes=1,
+    )
+    if not created:
+        current_item = _get_current_session_workout_from_loaded_session(session)
+        return StartWorkoutLogOut(
+            session=await _serialize_session(session),
+            first_session_workout=await _serialize_session_workout(current_item) if current_item else None,
+        )
+    session_workout = await _create_session_workout(
+        session,
+        workout.id,
+        # content_id=content.id if content else None,
+        note=f"Started workout: {workout.name}",
+        order=1,
+    )
+    session = await _load_full_session(session.id)
+    created_item = next(item for item in session.workouts if item.id == session_workout.id)
+
+    return StartWorkoutLogOut(
+        session=await _serialize_session(session),
+        first_session_workout=await _serialize_session_workout(created_item),
+    )
+
+
 # ---------------- UPDATE ----------------
 
 @router.put(
@@ -196,10 +263,12 @@ async def update_workout(
 
     category_id: Optional[int] = Form(None),
     equipment_id: Optional[int] = Form(None),
-    muscle_group_ids: Optional[str] = Form(None),
+    muscle_group_ids: Optional[List[int]] = Form(None),
 
     name: Optional[str] = Form(None),
     description: Optional[str] = Form(None),
+    workout_type: Optional[WorkoutType] = Form(None),
+    met_value: Optional[float] = Form(None),
 
     sets: Optional[str] = Form(None),
     reps: Optional[str] = Form(None),
@@ -239,6 +308,14 @@ async def update_workout(
 
     if description is not None:
         workout.description = _normalize_optional_text(description)
+
+    if workout_type is not None:
+        workout.workout_type = workout_type
+        if met_value is None:
+            workout.met_value = 8.0 if workout_type == WorkoutType.CARDIO else 5.0
+
+    if met_value is not None:
+        workout.met_value = met_value
 
     if sets is not None:
         workout.sets = _normalize_required_text(sets, "Sets")

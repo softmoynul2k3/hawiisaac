@@ -1,4 +1,4 @@
-import datetime
+from datetime import datetime
 from typing import Optional
 import re
 
@@ -190,7 +190,7 @@ async def signup(
     email: str = Form(...),
     password: str = Form(...),
     gender: Optional[str] = Form(None),
-    dob: Optional[str] = Form(None),
+    dob: Optional[str] = Form(None, description="Date of birth in YYYY-MM-DD format (e.g., 2000-05-21)"),
     otp: str = Form(...),
 ):
     email = _normalize_email(email)
@@ -199,8 +199,6 @@ async def signup(
     username = username.strip()
     password = password.strip()
 
-    await verify_otp(email, otp, 'signup')
-
     if not username:
         raise HTTPException(status_code=400, detail="Username is required")
     if not password:
@@ -208,6 +206,10 @@ async def signup(
 
     if await User.get_or_none(email=email):
         raise HTTPException(status_code=400, detail="Email already registered")
+    if await User.get_or_none(username=username):
+        raise HTTPException(status_code=400, detail="Username already taken")
+    
+    await verify_otp(email, otp, 'signup')
     
     gender = gender.strip() if gender else None
     dob = datetime.strptime(dob, "%Y-%m-%d").date() if dob else None
