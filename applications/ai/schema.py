@@ -8,15 +8,31 @@ class EquipmentScanRequest(BaseModel):
 
 
 class EquipmentDetection(BaseModel):
+    id: Optional[int] = None
     name: str
     confidence: float = Field(ge=0.0, le=1.0)
     description: Optional[str] = None
+
+
+class RecommendedWorkout(BaseModel):
+    id: int
+    name: str
+    description: Optional[str] = None
+    sets: str
+    reps: str
+    rest: str
+    banner: Optional[str] = None
+    video: Optional[str] = None
+    equipment: Optional[dict] = None
+    category: Optional[dict] = None
 
 
 class EquipmentScanResponse(BaseModel):
     success: bool
     equipment_detected: List[EquipmentDetection]
     primary_equipment: Optional[str] = None
+    primary_equipment_id: Optional[int] = None
+    recommended_workouts: List[RecommendedWorkout] = []
     error_message: Optional[str] = None
 
 

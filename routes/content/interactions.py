@@ -174,6 +174,7 @@ async def get_content_engagement(content_id: int, current_user: Optional[User] =
     content = await Content.get_or_none(id=content_id)
     if not content:
         raise HTTPException(status_code=404, detail="Content not found")
+    await content.fetch_related("workouts")
 
     summary = await _get_content_summary(content_id)
     content.bookmark_count = summary.bookmark_count
