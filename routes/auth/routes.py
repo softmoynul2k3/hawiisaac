@@ -230,6 +230,11 @@ async def signup(
 
 @router.post("/firebase", response_model=dict)
 async def firebase_auth(payload: SocialAuthRequest):
+    if not payload.id_token:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Token required",
+        )
     profile = await verify_firebase_id_token(payload.id_token)
 
     if not profile.email:
@@ -251,31 +256,6 @@ async def firebase_auth(payload: SocialAuthRequest):
 
     message = "User created successfully" if created else "Login successful"
     return _build_auth_response(user, message=message)
-
-
-@router.post("/apple", response_model=dict)
-async def apple_auth(payload: AppleAuthRequest):
-    profile = await verify_apple_id_token(
-        payload.id_token,
-        first_name=payload.first_name,
-        last_name=payload.last_name,
-    )
-
-    existing_user = await User.get_or_none(apple_id=profile.provider_user_id)
-    if existing_user is None and not profile.email:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Apple account email is required on first sign in.",
-        )
-
-    user, created = await get_or_create_social_user(profile)
-
-    if not user.is_active:
-        raise HTTPException(status_code=403, detail="Inactive user")
-
-    message = "User created successfully" if created else "Login successful"
-    return _build_auth_response(user, message=message)
-
 
 
 

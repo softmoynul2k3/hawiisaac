@@ -59,3 +59,4 @@ aerich.ini
 aerich/
 firebase-*.json
 *firebase*.json
+firebase-testing.json
