@@ -555,14 +555,21 @@
                 popupLoginMsg.textContent = "";
                 popupLoginMsg.classList.remove("error");
 
-                const result = await signInWithPopup(firebaseAuth, appleProvider);
-                const idToken = await result.user.getIdToken();
+                const result = await signInWithPopup(auth, provider);
 
-                const res = await fetch("/auth/firebase", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    credentials: "include",
-                    body: JSON.stringify({ id_token: idToken })
+                const user = result.user;
+
+                // THIS is the correct token
+                const idToken = await user.getIdToken(true);
+
+                await fetch("/auth/firebase", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    id_token: idToken,
+                }),
                 });
 
                 const data = await res.json().catch(() => ({}));
