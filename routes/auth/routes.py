@@ -12,7 +12,7 @@ from app.utils.otp_manager import generate_otp, verify_otp, verify_session_key
 from app.utils.social_auth import (
     get_or_create_social_user,
     verify_apple_id_token,
-    verify_google_id_token,
+    verify_firebase_id_token,
 )
 from app.config import settings
 router = APIRouter()
@@ -228,19 +228,20 @@ async def signup(
     return _build_auth_response(user, message="User created successfully")
 
 
-@router.post("/google", response_model=dict)
-async def google_auth(payload: SocialAuthRequest):
-    profile = await verify_google_id_token(payload.id_token)
+@router.post("/firebase", response_model=dict)
+async def firebase_auth(payload: SocialAuthRequest):
+    profile = await verify_firebase_id_token(payload.id_token)
 
     if not profile.email:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google account did not provide an email address.",
+            detail="Firebase account did not provide an email address.",
         )
+
     if not profile.email_verified:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Google email is not verified.",
+            detail="Email is not verified.",
         )
 
     user, created = await get_or_create_social_user(profile)
