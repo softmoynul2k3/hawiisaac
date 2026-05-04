@@ -57,3 +57,5 @@ Thumbs.db
 # Optional: if you use Aerich
 aerich.ini
 aerich/
+firebase-*.json
+*firebase*.json
