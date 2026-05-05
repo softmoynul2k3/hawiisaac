@@ -221,6 +221,14 @@
 
                     <button class="popup-submit-btn" type="submit">Sign In</button>
                 </form>
+                <div style="margin-top: 15px; text-align: center;">
+                    <button id="firebaseGoogleLoginBtn" class="popup-submit-btn" type="button">
+                        Continue with Google
+                    </button>
+                    <button id="firebaseAppleLoginBtn" class="popup-submit-btn" type="button">
+                        Continue with Apple
+                    </button>
+                </div>
                 <p id="popupLoginMsg" class="popup-login-msg"></p>
             </div>
         </div>
@@ -498,11 +506,143 @@
                 }
             });
 
+            window.persistAuthToken = persistAuthToken;
+            window.closeLoginModalAfterAuth = closeModal;
+            window.updateAuthButtonsAfterAuth = updateAuthButtons;
             animate();
             updateAuthButtons();
         });
-        </script>
+    </script>
 
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
+        import {
+            getAuth,
+            GoogleAuthProvider,
+            OAuthProvider,
+            signInWithPopup
+        } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
 
+        const firebaseConfig = {
+            apiKey: "AIzaSyA8V3FuxwAZ42QgngI3wTLuyaypqy7scQ4",
+            authDomain: "hykx-4b453.firebaseapp.com",
+            projectId: "hykx-4b453",
+            storageBucket: "hykx-4b453.firebasestorage.app",
+            messagingSenderId: "79513095630",
+            appId: "1:79513095630:web:913103c9dd593cd99eaf9f",
+            measurementId: "G-7WDDG9VWKQ"
+        };
+        // const firebaseConfig = {
+        //     apiKey: "AIzaSyD_xfQ_jL7UYbpnuxluvX5glmOrp1dziIY",
+        //     authDomain: "test-v1-fbde6.firebaseapp.com",
+        //     projectId: "test-v1-fbde6",
+        //     storageBucket: "test-v1-fbde6.firebasestorage.app",
+        //     messagingSenderId: "192440466238",
+        //     appId: "1:192440466238:web:e04aaa2732a500cda5ca6f",
+        //     measurementId: "G-N9FL2XTCJF"
+        // };
+
+        const firebaseApp = initializeApp(firebaseConfig);
+        const firebaseAuth = getAuth(firebaseApp);
+        const googleProvider = new GoogleAuthProvider();
+        const appleProvider = new OAuthProvider("apple.com");
+
+        const firebaseGoogleLoginBtn = document.getElementById("firebaseGoogleLoginBtn");
+        const popupLoginMsg = document.getElementById("popupLoginMsg");
+
+        firebaseAppleLoginBtn?.addEventListener("click", async () => {
+            try {
+                popupLoginMsg.textContent = "";
+                popupLoginMsg.classList.remove("error");
+
+                const result = await signInWithPopup(auth, provider);
+
+                const user = result.user;
+
+                // THIS is the correct token
+                const idToken = await user.getIdToken(true);
+
+                await fetch("/auth/firebase", {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    id_token: idToken,
+                }),
+                });
+
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                    throw new Error(data.detail || "Apple login failed");
+                }
+
+                window.persistAuthToken({
+                    token: {
+                        access_token: data.access_token,
+                        refresh_token: data.refresh_token || "",
+                        token_type: data.token_type || "bearer"
+                    }
+                });
+
+                popupLoginMsg.textContent = "Apple login success";
+
+                setTimeout(() => {
+                    window.closeLoginModalAfterAuth();
+                    window.updateAuthButtonsAfterAuth().finally(() => window.location.reload());
+                }, 500);
+
+            } catch (err) {
+                popupLoginMsg.textContent = err.message || "Apple login error";
+                popupLoginMsg.classList.add("error");
+            }
+        });
+
+        firebaseGoogleLoginBtn?.addEventListener("click", async () => {
+            try {
+                popupLoginMsg.textContent = "";
+
+                const result = await signInWithPopup(firebaseAuth, googleProvider);
+                const idToken = await result.user.getIdToken();
+
+                const res = await fetch("/auth/firebase", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json"
+                    },
+                    credentials: "include",
+                    body: JSON.stringify({
+                        id_token: idToken
+                    })
+                });
+
+                const data = await res.json().catch(() => ({}));
+
+                if (!res.ok) {
+                    throw new Error(data.detail || "Firebase login failed");
+                }
+
+                window.persistAuthToken({
+                    token: {
+                        access_token: data.access_token,
+                        refresh_token: data.refresh_token || "",
+                        token_type: data.token_type || "bearer"
+                    }
+                });
+
+                popupLoginMsg.textContent = "Google login success";
+
+                setTimeout(() => {
+                    window.closeLoginModalAfterAuth();
+                    window.updateAuthButtonsAfterAuth().finally(() => window.location.reload());
+                }, 500);
+
+            } catch (err) {
+                popupLoginMsg.textContent = err.message || "Google login error";
+                popupLoginMsg.classList.add("error");
+            }
+        });
+    </script>
 </body>
 </html>

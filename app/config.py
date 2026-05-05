@@ -31,8 +31,15 @@ class Settings(BaseSettings):
     DATABASE_URL: Optional[str] = None
 
     SECRET_KEY: Optional[str] = None
+    
     GOOGLE_CLIENT_IDS: str = ""
     APPLE_CLIENT_IDS: str = ""
+
+    FIREBASE_PROJECT_ID: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_FILE: Optional[str] = None
+    FIREBASE_SERVICE_ACCOUNT_JSON: Optional[str] = None
+
+
     BASE_URL: str = "http://localhost:8000/"
     REDIS_URL: str = "redis://localhost:6379/0"
     GEMINI_API_KEY: Optional[str] = None

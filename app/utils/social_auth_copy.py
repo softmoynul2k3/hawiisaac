@@ -1,13 +1,11 @@
-import json
 import re
 from dataclasses import dataclass
 from typing import Optional
 
-import firebase_admin
 import httpx
 from fastapi import HTTPException, status
-from firebase_admin import auth as firebase_auth
-from firebase_admin import credentials
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from jose import jwt
 
 from app.config import settings
@@ -16,11 +14,6 @@ from applications.user.models import User
 
 APPLE_ISSUER = "https://appleid.apple.com"
 APPLE_JWKS_URL = "https://appleid.apple.com/auth/keys"
-
-FIREBASE_PROVIDER_MAP = {
-    "google.com": "google",
-    "apple.com": "apple",
-}
 
 
 def _split_csv(value: Optional[str]) -> list[str]:
@@ -63,13 +56,11 @@ async def _build_unique_username(*candidates: Optional[str]) -> str:
 
     username = base
     suffix = 1
-
     while await User.filter(username=username).exists():
         suffix += 1
         username = f"{base}{suffix}"
-
         if len(username) > 120:
-            username = f"{base[:120 - len(str(suffix))]}{suffix}"
+            username = f"{base[:120-len(str(suffix))]}{suffix}"
 
     return username
 
@@ -85,100 +76,45 @@ class SocialProfile:
     photo: Optional[str] = None
 
 
-def _init_firebase() -> None:
-    if firebase_admin._apps:
-        return
-
-    service_account_file = getattr(settings, "FIREBASE_SERVICE_ACCOUNT_FILE", None)
-    service_account_json = getattr(settings, "FIREBASE_SERVICE_ACCOUNT_JSON", None)
-    project_id = getattr(settings, "FIREBASE_PROJECT_ID", None)
-
-    if service_account_file:
-        cred = credentials.Certificate(service_account_file)
-        firebase_admin.initialize_app(
-            cred,
-            {"projectId": project_id} if project_id else None,
-        )
-        return
-
-    if service_account_json:
-        try:
-            service_account_info = json.loads(service_account_json)
-        except json.JSONDecodeError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Invalid FIREBASE_SERVICE_ACCOUNT_JSON.",
-            ) from exc
-
-        cred = credentials.Certificate(service_account_info)
-        firebase_admin.initialize_app(
-            cred,
-            {"projectId": project_id} if project_id else None,
-        )
-        return
-
-    raise HTTPException(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail="Firebase service account is not configured.",
-    )
-
-
-async def verify_firebase_id_token(token: str) -> SocialProfile:
-    _init_firebase()
-
-    token = token.strip()
-    if not token:
+async def verify_google_id_token(token: str) -> SocialProfile:
+    client_ids = _split_csv(getattr(settings, "GOOGLE_CLIENT_IDS", ""))
+    if not client_ids:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Firebase id_token is required.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="GOOGLE_CLIENT_IDS is not configured.",
         )
 
     try:
-        decoded = firebase_auth.verify_id_token(token)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired Firebase token.",
-        ) from exc
-
-    firebase_uid = decoded.get("uid") or decoded.get("sub")
-    if not firebase_uid:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Firebase token missing uid.",
+        id_info = google_id_token.verify_oauth2_token(
+            token.strip(),
+            google_requests.Request(),
+            audience=None,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google token.") from exc
 
-    firebase_claims = decoded.get("firebase") or {}
-    sign_in_provider = firebase_claims.get("sign_in_provider")
+    audience = id_info.get("aud")
+    if audience not in client_ids:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token audience mismatch.")
 
-    provider = FIREBASE_PROVIDER_MAP.get(sign_in_provider)
-    if not provider:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Unsupported Firebase provider: {sign_in_provider}",
-        )
+    issuer = id_info.get("iss")
+    if issuer not in {"accounts.google.com", "https://accounts.google.com"}:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Google token issuer.")
 
-    email = _normalize_text(decoded.get("email"))
-    name = _normalize_text(decoded.get("name"))
+    provider_user_id = id_info.get("sub")
+    if not provider_user_id:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Google token missing subject.")
 
-    first_name = _normalize_text(decoded.get("given_name"))
-    last_name = _normalize_text(decoded.get("family_name"))
-
-    if name and not first_name:
-        parts = name.split(" ", 1)
-        first_name = _normalize_text(parts[0])
-
-        if len(parts) > 1 and not last_name:
-            last_name = _normalize_text(parts[1])
+    email = _normalize_text(id_info.get("email"))
 
     return SocialProfile(
-        provider=provider,
-        provider_user_id=firebase_uid,
+        provider="google",
+        provider_user_id=provider_user_id,
         email=email.lower() if email else None,
-        email_verified=_to_bool(decoded.get("email_verified")),
-        first_name=first_name,
-        last_name=last_name,
-        photo=_normalize_text(decoded.get("picture")),
+        email_verified=_to_bool(id_info.get("email_verified")),
+        first_name=_normalize_text(id_info.get("given_name")),
+        last_name=_normalize_text(id_info.get("family_name")),
+        photo=_normalize_text(id_info.get("picture")),
     )
 
 
@@ -194,13 +130,11 @@ async def _fetch_apple_jwks() -> dict:
         ) from exc
 
     jwks = response.json()
-
     if not isinstance(jwks, dict) or "keys" not in jwks:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Invalid Apple JWKS response.",
         )
-
     return jwks
 
 
@@ -210,7 +144,6 @@ async def verify_apple_id_token(
     last_name: Optional[str] = None,
 ) -> SocialProfile:
     client_ids = _split_csv(getattr(settings, "APPLE_CLIENT_IDS", ""))
-
     if not client_ids:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -218,70 +151,41 @@ async def verify_apple_id_token(
         )
 
     token = token.strip()
-
     if not token:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="id_token is required.",
-        )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="id_token is required.")
 
     try:
         header = jwt.get_unverified_header(token)
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Apple token header.",
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Apple token header.") from exc
 
     kid = header.get("kid")
     jwks = await _fetch_apple_jwks()
 
     key_data = next((key for key in jwks["keys"] if key.get("kid") == kid), None)
-
     if not key_data:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Apple signing key not found.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Apple signing key not found.")
 
     try:
         payload = jwt.decode(
             token,
             key_data,
             algorithms=["RS256"],
-            options={
-                "verify_at_hash": False,
-                "verify_aud": False,
-                "verify_iss": False,
-            },
+            options={"verify_at_hash": False, "verify_aud": False, "verify_iss": False},
         )
     except Exception as exc:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Apple token.",
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Apple token.") from exc
 
     if payload.get("iss") != APPLE_ISSUER:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Apple token issuer.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid Apple token issuer.")
 
     audience = payload.get("aud")
-
     if audience not in client_ids:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Apple token audience mismatch.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Apple token audience mismatch.")
 
     provider_user_id = payload.get("sub")
-
     if not provider_user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Apple token missing subject.",
-        )
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Apple token missing subject.")
 
     email = _normalize_text(payload.get("email"))
 
@@ -296,18 +200,7 @@ async def verify_apple_id_token(
 
 
 async def get_or_create_social_user(profile: SocialProfile) -> tuple[User, bool]:
-    provider_fields = {
-        "google": "google_id",
-        "apple": "apple_id",
-    }
-
-    provider_field = provider_fields.get(profile.provider)
-
-    if not provider_field:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported social provider: {profile.provider}",
-        )
+    provider_field = "google_id" if profile.provider == "google" else "apple_id"
 
     user = await User.get_or_none(**{provider_field: profile.provider_user_id})
     created = False
@@ -321,7 +214,6 @@ async def get_or_create_social_user(profile: SocialProfile) -> tuple[User, bool]
             profile.first_name,
             profile.provider,
         )
-
         user = await User.create(
             username=username,
             email=profile.email,
@@ -331,32 +223,25 @@ async def get_or_create_social_user(profile: SocialProfile) -> tuple[User, bool]
             auth_provider=profile.provider,
             **{provider_field: profile.provider_user_id},
         )
-
         created = True
         return user, created
 
     updated = False
-
     if getattr(user, provider_field) != profile.provider_user_id:
         setattr(user, provider_field, profile.provider_user_id)
         updated = True
-
     if profile.email and user.email != profile.email:
         user.email = profile.email
         updated = True
-
     if profile.first_name and not user.first_name:
         user.first_name = profile.first_name
         updated = True
-
     if profile.last_name and not user.last_name:
         user.last_name = profile.last_name
         updated = True
-
     if profile.photo and not user.photo:
         user.photo = profile.photo
         updated = True
-
     if user.auth_provider != profile.provider:
         user.auth_provider = profile.provider
         updated = True
