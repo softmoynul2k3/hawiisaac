@@ -549,27 +549,26 @@
 
         const firebaseGoogleLoginBtn = document.getElementById("firebaseGoogleLoginBtn");
         const popupLoginMsg = document.getElementById("popupLoginMsg");
+        const firebaseAppleLoginBtn = document.getElementById("firebaseAppleLoginBtn");
 
         firebaseAppleLoginBtn?.addEventListener("click", async () => {
             try {
                 popupLoginMsg.textContent = "";
                 popupLoginMsg.classList.remove("error");
 
-                const result = await signInWithPopup(auth, provider);
+                const result = await signInWithPopup(firebaseAuth, appleProvider);
 
-                const user = result.user;
+                const idToken = await result.user.getIdToken();
 
-                // THIS is the correct token
-                const idToken = await user.getIdToken(true);
-
-                await fetch("/auth/firebase", {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                },
-                body: JSON.stringify({
-                    id_token: idToken,
-                }),
+                const res = await fetch("/auth/firebase", {
+                    method: "POST",
+                    headers: {
+                        "Content-Type": "application/json",
+                    },
+                    credentials: "include",
+                    body: JSON.stringify({
+                        id_token: idToken,
+                    }),
                 });
 
                 const data = await res.json().catch(() => ({}));
