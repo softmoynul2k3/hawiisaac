@@ -16,6 +16,7 @@ class UserPlan(models.Model):
     # Basic Info
     user = fields.OneToOneField("models.User", related_name="subscription", on_delete=fields.CASCADE)
     plan = fields.ForeignKeyField("models.Plan", related_name="plan", on_delete=fields.SET_NULL, null=True)
+    pending_plan = fields.ForeignKeyField("models.Plan", related_name="pending_user_plans", on_delete=fields.SET_NULL, null=True)
 
     # Features
     features = fields.JSONField(blank=True, null=True)

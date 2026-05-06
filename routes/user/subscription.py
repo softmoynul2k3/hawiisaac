@@ -1,3 +1,4 @@
+from enum import Enum
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, List, Optional
@@ -15,6 +16,14 @@ from applications.user.subscription import Plan, SubscriptionStatus, UserPlan
 
 router = APIRouter(prefix="/subscription", tags=["Subscription"])
 
+class UpgradeType(str, Enum):
+    INSTANT = "instant"
+    PERIOD_END = "period_end"
+
+
+class UpgradePlanIn(BaseModel):
+    plan_id: str
+    upgrade_type: UpgradeType = UpgradeType.INSTANT
 
 class CheckoutSessionIn(BaseModel):
     plan_id: str
@@ -138,11 +147,18 @@ async def _sync_user_plan_from_subscription(
     price_id = items[0].get("price", {}).get("id") if items else None
 
     if user_plan is None and user_id:
-        user_plan = await UserPlan.get_or_none(user_id=user_id).prefetch_related("plan")
+        user_plan = await UserPlan.get_or_none(user_id=user_id).prefetch_related("plan", "pending_plan")
+
     if user_plan is None and subscription_id:
-        user_plan = await UserPlan.get_or_none(stripe_subscription_id=subscription_id).prefetch_related("plan")
+        user_plan = await UserPlan.get_or_none(
+            stripe_subscription_id=subscription_id
+        ).prefetch_related("plan", "pending_plan")
+
     if user_plan is None and customer_id:
-        user_plan = await UserPlan.get_or_none(stripe_customer_id=customer_id).prefetch_related("plan")
+        user_plan = await UserPlan.get_or_none(
+            stripe_customer_id=customer_id
+        ).prefetch_related("plan", "pending_plan")
+
     if user_plan is None:
         return None
 
@@ -152,17 +168,31 @@ async def _sync_user_plan_from_subscription(
             user_plan.plan = plan
             user_plan._sync_with_plan()
 
+            # Important:
+            # If Stripe switched to pending plan, clear pending_plan.
+            if user_plan.pending_plan_id == plan.id:
+                user_plan.pending_plan = None
+
     user_plan.stripe_customer_id = customer_id
     user_plan.stripe_subscription_id = subscription_id
     user_plan.stripe_price_id = price_id
 
-    user_plan.started_at = _stripe_ts_to_datetime(stripe_subscription.get("current_period_start")) or user_plan.started_at
-    user_plan.current_period_end = _stripe_ts_to_datetime(stripe_subscription.get("current_period_end"))
+    user_plan.started_at = (
+        _stripe_ts_to_datetime(stripe_subscription.get("current_period_start"))
+        or user_plan.started_at
+    )
+    user_plan.current_period_end = _stripe_ts_to_datetime(
+        stripe_subscription.get("current_period_end")
+    )
+
     user_plan.cancel_at_period_end = bool(stripe_subscription.get("cancel_at_period_end"))
 
     mapped_status = _status_from_stripe(stripe_subscription.get("status"))
     user_plan.status = mapped_status
-    user_plan.auto_renewal = mapped_status != SubscriptionStatus.CANCELLED and not user_plan.cancel_at_period_end
+    user_plan.auto_renewal = (
+        mapped_status != SubscriptionStatus.CANCELLED
+        and not user_plan.cancel_at_period_end
+    )
 
     await user_plan.save()
     return user_plan
@@ -293,6 +323,148 @@ async def create_checkout_session(payload: CheckoutSessionIn, user: User = Depen
     }
 
 
+
+@router.post("/upgrade")
+async def upgrade_subscription(
+    payload: UpgradePlanIn,
+    user: User = Depends(login_required),
+):
+    _require_stripe_config()
+
+    new_plan = await Plan.get_or_none(id=payload.plan_id)
+    if not new_plan:
+        raise HTTPException(status_code=404, detail="Plan not found")
+
+    if not new_plan.is_active:
+        raise HTTPException(status_code=400, detail="This plan is inactive")
+
+    if not new_plan.stripe_price_id:
+        raise HTTPException(status_code=400, detail="Stripe price is not set for this plan")
+
+    user_plan = await UserPlan.get_or_none(user_id=user.id).prefetch_related("plan", "pending_plan")
+    if not user_plan or not user_plan.stripe_subscription_id:
+        raise HTTPException(status_code=404, detail="No active Stripe subscription found")
+
+    if user_plan.plan_id == new_plan.id:
+        raise HTTPException(status_code=400, detail="You are already using this plan")
+
+    stripe_subscription = await run_in_threadpool(
+        stripe.Subscription.retrieve,
+        user_plan.stripe_subscription_id,
+    )
+
+    items = stripe_subscription.get("items", {}).get("data", [])
+    if not items:
+        raise HTTPException(status_code=400, detail="Stripe subscription item not found")
+
+    subscription_item_id = items[0]["id"]
+    current_price_id = items[0]["price"]["id"]
+    current_period_start = stripe_subscription.get("current_period_start")
+    current_period_end = stripe_subscription.get("current_period_end")
+
+    if payload.upgrade_type == UpgradeType.INSTANT:
+        updated_subscription = await run_in_threadpool(
+            stripe.Subscription.modify,
+            user_plan.stripe_subscription_id,
+            items=[
+                {
+                    "id": subscription_item_id,
+                    "price": new_plan.stripe_price_id,
+                }
+            ],
+            proration_behavior="always_invoice",
+            metadata={
+                "user_id": str(user.id),
+                "plan_id": str(new_plan.id),
+                "upgrade_type": "instant",
+            },
+        )
+
+        user_plan.pending_plan = None
+        await user_plan.save()
+
+        await _sync_user_plan_from_subscription(
+            updated_subscription,
+            user_plan=user_plan,
+            user_id=str(user.id),
+        )
+
+        return {
+            "detail": "Plan upgraded instantly",
+            "upgrade_type": "instant",
+            "active_plan": {
+                "id": str(new_plan.id),
+                "name": new_plan.name,
+                "price": str(new_plan.price),
+            },
+        }
+
+    schedule = await run_in_threadpool(
+        stripe.SubscriptionSchedule.create,
+        from_subscription=user_plan.stripe_subscription_id,
+    )
+
+    await run_in_threadpool(
+        stripe.SubscriptionSchedule.modify,
+        schedule.id,
+        end_behavior="release",
+        proration_behavior="none",
+        phases=[
+            {
+                "start_date": current_period_start,
+                "end_date": current_period_end,
+                "items": [
+                    {
+                        "price": current_price_id,
+                        "quantity": 1,
+                    }
+                ],
+            },
+            {
+                "start_date": current_period_end,
+                "items": [
+                    {
+                        "price": new_plan.stripe_price_id,
+                        "quantity": 1,
+                    }
+                ],
+                "metadata": {
+                    "user_id": str(user.id),
+                    "plan_id": str(new_plan.id),
+                    "upgrade_type": "period_end",
+                },
+            },
+        ],
+        metadata={
+            "user_id": str(user.id),
+            "plan_id": str(new_plan.id),
+            "upgrade_type": "period_end",
+        },
+    )
+
+    user_plan.pending_plan = new_plan
+    user_plan.auto_renewal = True
+    user_plan.cancel_at_period_end = False
+    await user_plan.save()
+
+    return {
+        "detail": "Plan upgrade scheduled for current period end",
+        "upgrade_type": "period_end",
+        "current_period_end": user_plan.current_period_end.isoformat() if user_plan.current_period_end else None,
+        "active_plan": {
+            "id": str(user_plan.plan.id) if user_plan.plan else None,
+            "name": user_plan.plan.name if user_plan.plan else None,
+            "price": str(user_plan.plan.price) if user_plan.plan else None,
+        },
+        "pending_plan": {
+            "id": str(new_plan.id),
+            "name": new_plan.name,
+            "price": str(new_plan.price),
+        },
+    }
+
+
+
 @router.post("/webhook")
 async def stripe_webhook(request: Request):
     _require_stripe_config()
@@ -346,7 +518,11 @@ async def stripe_webhook(request: Request):
                 stripe_subscription = await run_in_threadpool(stripe.Subscription.retrieve, subscription_id)
                 await _sync_user_plan_from_subscription(stripe_subscription, user_plan=user_plan, user_id=user_id)
 
-    elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
+    elif event_type in {
+        "customer.subscription.created",
+        "customer.subscription.updated",
+        "customer.subscription.deleted",
+    }:
         await _sync_user_plan_from_subscription(event_obj)
 
     elif event_type in {"invoice.paid", "invoice.payment_failed"}:
@@ -360,7 +536,7 @@ async def stripe_webhook(request: Request):
 
 @router.get("/me")
 async def my_subscription(user: User = Depends(login_required)):
-    user_plan = await UserPlan.get_or_none(user_id=user.id).prefetch_related("plan")
+    user_plan = await UserPlan.get_or_none(user_id=user.id).prefetch_related("plan", "pending_plan")
     if not user_plan:
         return {"subscription": None}
 
@@ -378,6 +554,12 @@ async def my_subscription(user: User = Depends(login_required)):
                 "price": str(user_plan.plan.price) if user_plan.plan else None,
                 "duration_days": user_plan.plan.duration_days if user_plan.plan else None,
             },
+            "pending_plan": {
+                "id": str(user_plan.pending_plan.id) if user_plan.pending_plan else None,
+                "name": user_plan.pending_plan.name if user_plan.pending_plan else None,
+                "price": str(user_plan.pending_plan.price) if user_plan.pending_plan else None,
+                "duration_days": user_plan.pending_plan.duration_days if user_plan.pending_plan else None,
+            },
             "stripe_customer_id": user_plan.stripe_customer_id,
             "stripe_subscription_id": user_plan.stripe_subscription_id,
         }
@@ -392,7 +574,6 @@ async def list_plans():
         )
         .order_by("price")
     )
-    print(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>", plans)
     return {
         "plans": [
             {
