@@ -14,6 +14,7 @@ from applications.equipments.schema import serialize_workout
 from applications.session.models import WorkoutSession
 from applications.session.schema import StartWorkoutLogOut
 from applications.user.models import User
+from applications.user.subscription import SubscriptionStatus, UserPlan
 from routes.sessions.routes import (
     _create_or_reuse_active_session,
     _create_session_workout,
@@ -107,6 +108,7 @@ async def create_workout(
     reps: str = Form(...),
     rest: str = Form(...),
     uses: Optional[str] = Form(None),
+    is_free: Optional[bool] = Form(None),
 
     tags: Optional[str] = Form(None, description="use comma for seperate."),
     banner: Optional[UploadFile] = None,
@@ -141,6 +143,7 @@ async def create_workout(
         uses=_parse_uses(uses),
         banner=banner_url,
         video=video_url,
+        is_free=is_free,
     )
 
     if muscle_groups is not None:
@@ -160,6 +163,7 @@ async def list_workout(
     equipment_id: Optional[int] = Query(None),
     muscle_group_id: Optional[int] = Query(None),
     workout_type: Optional[WorkoutType] = Query(None),
+    is_free: Optional[bool] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -173,6 +177,8 @@ async def list_workout(
             Q(description__icontains=search)
         )
 
+    if is_free is not None:
+        queryset = queryset.filter(is_free=is_free)
 
     if category_id:
         queryset = queryset.filter(category_id=category_id)
@@ -201,28 +207,38 @@ async def get_workout(workout_id: int):
 
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
-
+    
     return await serialize_workout(workout)
 
 
 @router.post("/{workout_id}/start-log", response_model=StartWorkoutLogOut, status_code=status.HTTP_201_CREATED)
 async def start_workout_log(
     workout_id: int,
-    # content_id: Optional[int] = Query(None),
     current_user: User = Depends(login_required),
 ):
-    workout = await Workout.get_or_none(id=workout_id).prefetch_related("equipment", "category", "muscle_groups")
+    workout = await Workout.get_or_none(id=workout_id).prefetch_related("equipment", "category", "muscle_groups", "userplan")
     if not workout:
         raise HTTPException(status_code=404, detail="Workout not found")
+    
+    user_plan = await UserPlan.get_or_none(user=current_user).prefetch_related("plan")
 
-    # content = None
-    # if content_id is not None:
-    #     content = await Content.get_or_none(id=content_id).prefetch_related("workouts")
-    #     if not content:
-    #         raise HTTPException(status_code=404, detail="Content not found")
-    #     linked_workout_ids = {item.id for item in content.workouts}
-    #     if linked_workout_ids and workout.id not in linked_workout_ids:
-    #         raise HTTPException(status_code=400, detail="Selected workout does not match the linked content workouts")
+    if (
+        not user_plan
+        or not user_plan.plan
+        or user_plan.status != SubscriptionStatus.ACTIVE
+        or user_plan.is_expired
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Active subscription required.",
+        )
+
+    if not user_plan.plan.price > 0 and not workout.is_free:
+        raise HTTPException(
+            status_code=403,
+            detail="Please purchase a pro plan monthly or yearly.",
+        )
+
 
     session, created = await _create_or_reuse_active_session(
         current_user,
@@ -276,6 +292,7 @@ async def update_workout(
     uses: Optional[str] = Form(None),
 
     tags: Optional[str] = Form(None),
+    is_free: Optional[bool] = Form(None),
     banner: Optional[UploadFile] = None,
     video: Optional[UploadFile] = None,
 ):
@@ -331,6 +348,9 @@ async def update_workout(
 
     if tags is not None:
         workout.tags = _normalize_optional_text(tags)
+
+    if is_free is not None:
+        workout.is_free = is_free
 
     if banner and banner.filename:
         workout.banner = await update_file(

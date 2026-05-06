@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     AI_PROVIDER: str = "gemini"  # "gemini" or "openai"
 
+    STRIPE_SECRET_KEY: str = ""
+    STRIPE_PUBLISHABLE_KEY: str = ""
+    STRIPE_WEBHOOK_SECRET: str = ""
+    STRIPE_ENDPOINT_SECRET: str = ""
+
+    FRONTEND_URL: str = "myapp://subscription"
+
     def model_post_init(self, __context):
         if self.DB_ENGINE == "sqlite":
             self.DATABASE_URL = f"sqlite:///{self.DB_NAME}"

@@ -20,6 +20,7 @@ class EquipmentOut(BaseModel):
     name: str
     description: Optional[str] = None
     image: Optional[str] = None
+    is_free: Optional[bool] = None
     created_at: str
 
 
@@ -40,6 +41,7 @@ def _serialize_equipment(equipment: Equipment) -> EquipmentOut:
         name=equipment.name,
         description=equipment.description,
         image=equipment.image,
+        is_free=equipment.is_free,
         created_at=to_utc_z(equipment.created_at) or "",
     )
 
@@ -55,6 +57,7 @@ async def create_equipment(
     category_id: int = Form(...),
     name: str = Form(...),
     description: Optional[str] = Form(None),
+    is_free: Optional[bool] = Form(None),
     image: Optional[UploadFile] = None,
 ):
     category = await Category.get_or_none(id=category_id)
@@ -75,6 +78,7 @@ async def create_equipment(
         name=name,
         description=description,
         image=image_url,
+        is_free=is_free,
     )
 
     await equipment.fetch_related("category")
@@ -86,6 +90,7 @@ async def create_equipment(
 async def list_equipments(
     search: Optional[str] = Query(None),
     category_id: Optional[int] = Query(None),
+    is_free: Optional[bool] = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -93,6 +98,9 @@ async def list_equipments(
 
     if search:
         queryset = queryset.filter(name__icontains=search.strip())
+
+    if is_free is not None:
+        queryset = queryset.filter(is_free=is_free)
 
     if category_id is not None:
         queryset = queryset.filter(category_id=category_id)
@@ -126,6 +134,7 @@ async def update_equipment(
     category_id: Optional[int] = Form(None),
     name: str = Form(...),
     description: Optional[str] = Form(None),
+    is_free: Optional[bool] = Form(None),
     image: Optional[UploadFile] = None,
 ):
     equipment = await Equipment.get_or_none(id=equipment_id).prefetch_related("category")
@@ -165,6 +174,8 @@ async def update_equipment(
             file_url=equipment.image,
             upload_to="equipments",
         )
+    if is_free is not None:
+        equipment.is_free = is_free
 
     await equipment.save()
 

@@ -17,6 +17,7 @@ class ContentCreate(BaseModel):
     image: Optional[str] = None
     video: Optional[str] = None
     is_active: bool = True
+    is_free: bool = True
 
 
 class ContentUpdate(BaseModel):
@@ -29,6 +30,7 @@ class ContentUpdate(BaseModel):
     image: Optional[str] = None
     video: Optional[str] = None
     is_active: Optional[bool] = None
+    is_free: Optional[bool] = None
 
 
 class ContentOut(BaseModel):
@@ -42,6 +44,7 @@ class ContentOut(BaseModel):
     image: Optional[str] = None
     video: Optional[str] = None
     is_active: bool
+    is_free: bool
     created_at: str
     updated_at: str
     bookmark_count: int = 0
@@ -60,6 +63,7 @@ class ContentListItemOut(BaseModel):
     image: Optional[str] = None
     video: Optional[str] = None
     is_active: bool
+    is_free: bool
     created_at: str
     updated_at: str
     bookmark_count: int = 0
@@ -128,6 +132,7 @@ def serialize_content(content: Content) -> ContentOut:
                 "distance": workout.distance,
                 "speed": workout.speed,
                 "incline": workout.incline,
+                "is_free": workout.is_free,
             }
             for workout in workouts
         ],
@@ -136,6 +141,7 @@ def serialize_content(content: Content) -> ContentOut:
         image=content.image,
         video=content.video,
         is_active=content.is_active,
+        is_free=content.is_free,
         created_at=to_utc_z(content.created_at) or "",
         updated_at=to_utc_z(content.updated_at) or "",
         bookmark_count=getattr(content, "bookmark_count", 0) or 0,
@@ -156,6 +162,7 @@ def serialize_content_list_item(content: Content) -> ContentListItemOut:
         image=content.image,
         video=content.video,
         is_active=content.is_active,
+        is_free=content.is_free,
         created_at=to_utc_z(content.created_at) or "",
         updated_at=to_utc_z(content.updated_at) or "",
         bookmark_count=getattr(content, "bookmark_count", 0) or 0,
