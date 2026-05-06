@@ -1,6 +1,7 @@
 from typing import Dict, Any
 
 from applications.user.models import User, Permission
+from applications.user.subscription import SubscriptionStatus
 
 
 
@@ -9,6 +10,8 @@ async def serialize_user(user: User) -> Dict[str, Any]:
         "groups",
         "groups__permissions",
         "user_permissions",
+        "subscription",
+        "subscription__plan",
     )
 
 
@@ -21,6 +24,33 @@ async def serialize_user(user: User) -> Dict[str, Any]:
             for permission in group.permissions:
                 if permission.codename:
                     permission_codes.add(permission.codename)
+
+
+    subscription = getattr(user, "subscription", None)
+
+    is_pro = False
+    subscription_data = None
+
+    if (
+        subscription
+        and subscription.plan
+        and subscription.status == SubscriptionStatus.ACTIVE
+        and not subscription.is_expired
+    ):
+        is_pro = subscription.plan.price > 0
+
+        subscription_data = {
+            "plan_name": subscription.plan.name,
+            "price": float(subscription.plan.price),
+            "status": subscription.status,
+            "is_expired": subscription.is_expired,
+            "expires_at": (
+                subscription.expires_at.isoformat()
+                if subscription.expires_at
+                else None
+            ),
+        }
+
 
 
 
@@ -44,6 +74,10 @@ async def serialize_user(user: User) -> Dict[str, Any]:
         "gender": user.gender,
         "photo": user.photo,
         "dob": user.dob.isoformat() if user.dob else None,
+
+        # -------- SUBSCRIPTION --------
+        "is_pro": is_pro,
+        "subscription": subscription_data,
 
         # -------- RELATIONSHIPS --------
         "groups": [{"id": g.id, "name": g.name} for g in user.groups],

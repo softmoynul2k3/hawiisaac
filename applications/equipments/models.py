@@ -20,6 +20,7 @@ class Equipment(models.Model):
     name = fields.CharField(max_length=50)
     description = fields.TextField(null=True, blank=True)
     image = fields.CharField(max_length=255, blank=True, null=True)
+    is_free = fields.BooleanField(default=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
     class Meta:
@@ -72,6 +73,7 @@ class Workout(models.Model):
     uses = fields.JSONField(null=True, blank=True)
 
     banner = fields.CharField(max_length=255, blank=True, null=True)
+    is_free = fields.BooleanField(default=True)
     video = fields.CharField(max_length=255, blank=True, null=True)
     created_at = fields.DatetimeField(auto_now_add=True)
 
